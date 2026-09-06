@@ -1,0 +1,55 @@
+/*
+ * Print output. Only the sheet view is meant to be printed — the toolbar
+ * switches to it before calling print() — so this hides everything outside
+ * `.sheet-page` and lets the table's own page-break rules do the rest.
+ * Tabloid landscape matches the original tool's layout, which crews already
+ * print and hand out.
+ */
+
+@page {
+  size: tabloid landscape;
+  margin: 10mm;
+}
+
+@media print {
+  body {
+    background: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .app-shell {
+    display: block;
+    height: auto;
+  }
+  .sheet-scroll {
+    overflow: visible;
+    background: none;
+  }
+  .sheet-page {
+    margin: 0;
+    padding: 0;
+    max-width: none;
+    border: none !important;
+    box-shadow: none;
+  }
+  .sheet-table th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .sheet-row-mag td,
+  .sheet-row-pr td,
+  .sheet-row-both td {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .sheet-row {
+    page-break-inside: avoid;
+  }
+  input,
+  select {
+    border: none !important;
+    background: transparent !important;
+    color: #000 !important;
+  }
+}

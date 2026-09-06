@@ -1,0 +1,761 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark chrome around a light working surface — the toolbar, stats bar, and
+ * inspector are instrument panels; the grid and the printed sheet are the
+ * paper the shoot actually gets judged on, so they stay white. One warm
+ * accent marks selection and what needs attention; mag/pr keep the blue/
+ * green pairing production staff already associate with those two tracks.
+ */
+
+:root {
+  --chrome-950: #0b0d0f;
+  --chrome-900: #101215;
+  --chrome-850: #15181c;
+  --chrome-800: #1a1e23;
+  --chrome-750: #1f242a;
+  --chrome-700: #262c33;
+  --chrome-600: #323942;
+  --chrome-500: #434b55;
+  --chrome-300: #a3aab3;
+  --chrome-200: #c2c8cf;
+  --chrome-100: #e2e5e9;
+
+  --paper: #ffffff;
+  --paper-line: #e2e5e9;
+  --ink: #14171a;
+  --ink-dim: #5a6470;
+
+  --accent: #2f7fd1;
+  --accent-dim: #1f5c9c;
+  --accent-wash: rgba(47, 127, 209, 0.12);
+
+  --mag: #1e40af;
+  --mag-bg: #dbeafe;
+  --pr: #166534;
+  --pr-bg: #dcfce7;
+
+  --ok: #10b981;
+  --warn: #d97706;
+  --bad: #dc2626;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--chrome-900);
+  color: var(--chrome-100);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+@layer components {
+  /* --- buttons & inputs --------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center gap-1 rounded px-3 py-1.5 text-[12px] font-semibold uppercase tracking-wide;
+    background: var(--chrome-700);
+    color: var(--chrome-100);
+    border: 1px solid var(--chrome-600);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn:hover {
+    background: var(--chrome-600);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent-dim);
+  }
+  .btn-primary:hover {
+    background: var(--accent-dim);
+  }
+  .btn-danger {
+    background: transparent;
+    border-color: var(--bad);
+    color: var(--bad);
+  }
+  .btn-danger:hover {
+    background: var(--bad);
+    color: #fff;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-[11px];
+  }
+  .btn-icon {
+    @apply rounded px-1.5 py-1 text-[13px] leading-none;
+    background: transparent;
+    border: none;
+    color: var(--chrome-300);
+    cursor: pointer;
+  }
+  .btn-icon:hover {
+    color: var(--ink);
+    background: var(--chrome-100);
+  }
+
+  .chip {
+    @apply rounded px-2 py-1 text-[11px] font-bold uppercase tracking-wide;
+    background: var(--chrome-750);
+    color: var(--chrome-200);
+    border: 1px solid var(--chrome-600);
+    cursor: pointer;
+  }
+  .chip:hover {
+    background: var(--chrome-600);
+    color: #fff;
+  }
+  .chip-active {
+    background: var(--accent);
+    border-color: var(--accent-dim);
+    color: #fff;
+  }
+
+  .field {
+    @apply rounded px-2 py-1 text-[12px];
+    background: var(--chrome-800);
+    border: 1px solid var(--chrome-600);
+    color: var(--chrome-100);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .field-sm {
+    @apply px-1.5 py-0.5 text-[11px];
+    width: 96px;
+  }
+
+  .pill {
+    @apply rounded px-1 py-0.5 text-[9px] font-extrabold uppercase tracking-wide;
+  }
+  .pill-mag {
+    background: var(--mag-bg);
+    color: var(--mag);
+  }
+  .pill-pr {
+    background: var(--pr-bg);
+    color: var(--pr);
+  }
+  .pill-neutral {
+    background: var(--chrome-100);
+    color: var(--ink-dim);
+  }
+  .pill-warn {
+    background: #fef3c7;
+    color: var(--warn);
+  }
+  .pill-good {
+    background: #d1fae5;
+    color: var(--ok);
+  }
+
+  /* --- toolbar --------------------------------------------------------- */
+  .toolbar {
+    background: var(--chrome-850);
+    border-bottom: 1px solid var(--chrome-700);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .toolbar-group-header {
+    margin-left: auto;
+  }
+  .toolbar-group-header .field {
+    width: 160px;
+  }
+  .toolbar-group-right {
+    margin-left: auto;
+  }
+  .toolbar-label {
+    @apply text-[10px] font-bold uppercase tracking-wide;
+    color: var(--chrome-300);
+    margin-right: 2px;
+  }
+  .toolbar-search {
+    flex: 1;
+    min-width: 160px;
+    max-width: 320px;
+  }
+  .toolbar-hint {
+    @apply text-[10px];
+    color: var(--chrome-300);
+    white-space: nowrap;
+  }
+  .zoom-slider {
+    width: 90px;
+  }
+
+  /* --- stats bar --------------------------------------------------------- */
+  .stats-bar {
+    display: flex;
+    background: var(--chrome-900);
+    border-bottom: 1px solid var(--chrome-700);
+    padding: 8px 12px;
+    flex-shrink: 0;
+  }
+  .stat-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-right: 1px solid var(--chrome-700);
+  }
+  .stat-card:last-child {
+    border-right: none;
+  }
+  .stat-label {
+    @apply text-[9px] font-bold uppercase tracking-wide;
+    color: var(--chrome-300);
+  }
+  .stat-value {
+    @apply text-[15px] font-bold;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value-warn {
+    color: var(--warn);
+  }
+  .stat-value-good {
+    color: var(--ok);
+  }
+
+  /* --- batch bar --------------------------------------------------------- */
+  .batch-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--chrome-800);
+    border-bottom: 1px solid var(--chrome-700);
+    padding: 6px 12px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .batch-count {
+    @apply text-[11px] font-bold;
+    background: var(--accent);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .batch-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  /* --- contact sheet grid ---------------------------------------------- */
+  .sheet-scroll {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+    background: var(--chrome-900);
+  }
+  .grid-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px;
+  }
+  .grid-wrap-drag-over {
+    outline: 2px dashed var(--accent);
+    outline-offset: -8px;
+  }
+  .drop-veil {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(47, 127, 209, 0.15);
+    color: #fff;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+  }
+  .import-toast {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--chrome-800);
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 11px;
+    border: 1px solid var(--chrome-600);
+  }
+  .import-toast-fade {
+    opacity: 0.7;
+  }
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    color: var(--chrome-300);
+    padding: 40px;
+    text-align: center;
+  }
+
+  /* --- tile --------------------------------------------------------- */
+  .tile {
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 2px solid transparent;
+    cursor: pointer;
+    user-select: none;
+  }
+  .tile-selected {
+    border-color: var(--accent);
+  }
+  .tile-active {
+    box-shadow: 0 0 0 2px var(--accent-wash);
+  }
+  .tile-drag-over {
+    border-color: var(--ok);
+  }
+  .tile-thumb {
+    position: relative;
+    background: #f3f4f6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .tile-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+  .tile-empty {
+    @apply text-[10px] font-bold uppercase tracking-wide;
+    color: #9ca3af;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    text-align: center;
+  }
+  .tile-file-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .tile-checkbox {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    z-index: 2;
+  }
+  .tile-checkbox input {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+    accent-color: var(--accent);
+  }
+  .tile-warning {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    color: var(--warn);
+    font-size: 13px;
+    filter: drop-shadow(0 0 2px #fff);
+  }
+  .tile-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px;
+    border-top: 1px solid var(--paper-line);
+  }
+  .tile-shotnum {
+    @apply text-[11px] font-bold;
+    color: var(--ink);
+  }
+  .tile-tags {
+    display: flex;
+    gap: 3px;
+  }
+  .tile-stages {
+    display: flex;
+    gap: 2px;
+    padding: 0 6px 6px;
+    flex-wrap: wrap;
+  }
+  .stage-dot {
+    @apply text-[8px] font-extrabold uppercase;
+    background: #f3f4f6;
+    color: #9ca3af;
+    border-radius: 2px;
+    padding: 1px 3px;
+  }
+  .stage-dot-done {
+    background: var(--ok);
+    color: #fff;
+  }
+
+  /* --- inspector --------------------------------------------------- */
+  .inspector {
+    width: 300px;
+    flex-shrink: 0;
+    background: var(--chrome-850);
+    border-left: 1px solid var(--chrome-700);
+    padding: 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .inspector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .inspector-header h2 {
+    @apply text-[14px] font-bold;
+    margin: 0;
+  }
+  .inspector-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: var(--chrome-900);
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .inspector-preview img {
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: 4px;
+  }
+  .inspector-preview-empty {
+    @apply text-[11px];
+    color: var(--chrome-300);
+    padding: 30px 0;
+  }
+  .inspector-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .inspector-field span {
+    @apply text-[10px] font-bold uppercase tracking-wide;
+    color: var(--chrome-300);
+  }
+  .inspector-side {
+    border-top: 1px solid var(--chrome-700);
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .inspector-side h3 {
+    @apply text-[11px] font-bold uppercase tracking-wide;
+    color: var(--accent);
+    margin: 0;
+  }
+  .inspector-pipeline {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+  .inspector-hint {
+    @apply text-[11px];
+    color: var(--chrome-300);
+  }
+
+  .pipeline-toggle {
+    @apply text-[10px] font-bold uppercase tracking-wide rounded px-2 py-1;
+    background: var(--chrome-800);
+    color: var(--chrome-300);
+    border: 1px solid var(--chrome-600);
+    cursor: pointer;
+  }
+  .pipeline-toggle-yes {
+    background: var(--ok);
+    color: #fff;
+    border-color: var(--ok);
+  }
+  .pipeline-toggle:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .pipeline-toggle-compact {
+    padding: 3px 4px;
+    width: 100%;
+  }
+
+  /* --- print sheet (screen chrome; see print.css for @media print) --- */
+  .sheet-page {
+    background: var(--paper);
+    color: var(--ink);
+    margin: 16px auto;
+    padding: 16px 20px;
+    max-width: 1400px;
+    border-radius: 4px;
+    border: 3px solid transparent;
+  }
+  .sheet-page-drag-over {
+    border-color: var(--accent);
+  }
+  .sheet-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 3px solid var(--ink);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+  }
+  .sheet-header h1 {
+    @apply text-[20px] font-bold uppercase tracking-wide;
+    margin: 0 0 8px 0;
+  }
+  .sheet-header-inputs {
+    display: flex;
+    gap: 24px;
+  }
+  .sheet-header-inputs label,
+  .sheet-header-right label {
+    @apply text-[10px] font-bold uppercase tracking-wide;
+    color: var(--ink-dim);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .sheet-header-inputs input,
+  .sheet-header-right input {
+    border: none;
+    border-bottom: 1px solid var(--paper-line);
+    padding: 2px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    background: transparent;
+    min-width: 180px;
+  }
+  .sheet-header-right {
+    text-align: right;
+  }
+  .sheet-table-wrap {
+    overflow-x: auto;
+  }
+  .sheet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+  .sheet-table th {
+    background: var(--ink);
+    color: #fff;
+    text-transform: uppercase;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 6px 4px;
+    border: 1px solid var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .sheet-table td {
+    border: 1px solid var(--paper-line);
+    padding: 4px;
+    vertical-align: middle;
+  }
+  .sheet-cell-center {
+    text-align: center;
+  }
+  .sheet-drag-handle {
+    cursor: grab;
+    color: #9ca3af;
+  }
+  .sheet-thumb {
+    width: 64px;
+    height: 44px;
+    object-fit: contain;
+  }
+  .sheet-thumb-empty {
+    color: #d1d5db;
+  }
+  .sheet-row-mag td {
+    background: var(--mag-bg);
+  }
+  .sheet-row-pr td {
+    background: var(--pr-bg);
+  }
+  .sheet-row-both td {
+    background: #f5f3ff;
+  }
+  .sheet-row-selected td {
+    border-left: 3px solid var(--accent);
+  }
+  .cell-input,
+  .cell-select {
+    width: 100%;
+    border: none;
+    background: transparent;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: center;
+    padding: 2px;
+  }
+  .cell-input:focus,
+  .cell-select:focus {
+    outline: none;
+    background: var(--accent-wash);
+  }
+  .split-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 2px 0;
+  }
+  .split-divider {
+    border-top: 1px solid var(--paper-line);
+  }
+  .dest-tag {
+    @apply text-[8px] font-extrabold uppercase;
+    padding: 1px 3px;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .dest-mag {
+    background: var(--mag-bg);
+    color: var(--mag);
+  }
+  .dest-pr {
+    background: var(--pr-bg);
+    color: var(--pr);
+  }
+  .del-btn {
+    color: var(--bad);
+    background: transparent;
+    border: none;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 13px;
+  }
+}
+
+@layer components {
+  /* --- modal (Elvis settings) ------------------------------------------ */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(11, 13, 15, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+  .modal {
+    background: var(--chrome-850);
+    border: 1px solid var(--chrome-700);
+    border-radius: 8px;
+    padding: 16px;
+    width: 420px;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .modal-wide {
+    width: 640px;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-header h2 {
+    @apply text-[14px] font-bold;
+    margin: 0;
+  }
+  .modal-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .modal-row .inspector-field {
+    flex: 1;
+    min-width: 120px;
+  }
+  .modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .inspector-field-summary {
+    @apply text-[11px] font-bold uppercase tracking-wide;
+    color: var(--chrome-300);
+    cursor: pointer;
+  }
+}

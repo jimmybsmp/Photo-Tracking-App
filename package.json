@@ -1,0 +1,81 @@
+{
+  "name": "phototrack",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Photo production tracker — the shot list from capture to approval, one grid per production.",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "desktop": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "desktop:build": "npm run build && electron-builder",
+    "build:standalone": "vite build --config vite.standalone.config.ts && node scripts/build-standalone.mjs",
+    "dist:mac": "npm run build && electron-builder --mac --universal"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "fflate": "^0.8.2",
+    "lucide-react": "^0.460.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^22.3.27",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.phototrack.app",
+    "productName": "PhotoTrack",
+    "copyright": "PhotoTrack",
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ],
+      "darkModeSupport": true,
+      "identity": null,
+      "type": "distribution",
+      "minimumSystemVersion": "10.13",
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PhotoTrack Project",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "CFBundleTypeExtensions": ["phototrack", "ptdelta"]
+          }
+        ]
+      }
+    },
+    "dmg": {
+      "title": "PhotoTrack",
+      "window": { "width": 540, "height": 380 }
+    },
+    "compression": "maximum",
+    "electronLanguages": ["en", "en_GB"]
+  }
+}
