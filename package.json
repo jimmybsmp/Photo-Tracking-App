@@ -7,13 +7,14 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-file-protocol.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "desktop": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
     "desktop:build": "npm run build && electron-builder",
     "build:standalone": "vite build --config vite.standalone.config.ts && node scripts/build-standalone.mjs",
-    "dist:mac": "npm run build && electron-builder --mac --universal"
+    "dist:mac": "npm run build && electron-builder --mac --universal",
+    "check:file-protocol": "node scripts/check-file-protocol.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
@@ -55,8 +56,18 @@
     "mac": {
       "category": "public.app-category.graphics-design",
       "target": [
-        { "target": "dmg", "arch": ["universal"] },
-        { "target": "zip", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "darkModeSupport": true,
       "identity": null,
@@ -68,16 +79,25 @@
             "CFBundleTypeName": "PhotoTrack Project",
             "CFBundleTypeRole": "Editor",
             "LSHandlerRank": "Owner",
-            "CFBundleTypeExtensions": ["phototrack", "ptdelta"]
+            "CFBundleTypeExtensions": [
+              "phototrack",
+              "ptdelta"
+            ]
           }
         ]
       }
     },
     "dmg": {
       "title": "PhotoTrack",
-      "window": { "width": 540, "height": 380 }
+      "window": {
+        "width": 540,
+        "height": 380
+      }
     },
     "compression": "maximum",
-    "electronLanguages": ["en", "en_GB"]
+    "electronLanguages": [
+      "en",
+      "en_GB"
+    ]
   }
 }
