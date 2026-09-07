@@ -44,7 +44,9 @@
     "copyright": "PhotoTrack",
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "package.json",
+      "!node_modules/**/*"
     ],
     "directories": {
       "output": "release",

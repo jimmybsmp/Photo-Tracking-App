@@ -37,7 +37,7 @@ other — that's deliberate, the same reasoning as the sibling OpticPlan app.
 
 | | Desktop app | Standalone HTML |
 | --- | --- | --- |
-| Runs on | macOS 10.13 (High Sierra) through Apple Silicon, one universal build | Any browser, any machine |
+| Runs on | macOS 10.13 (High Sierra) through Apple Silicon — see the build note below | Any browser, any machine |
 | Install | Unzip, drag to Applications | Double-click the file |
 | Saving | Native dialogs; Save writes back to the open file | Browser download |
 | Crash recovery | Autosaves to disk, offers to restore | Autosaves to IndexedDB, offers to restore |
@@ -45,18 +45,33 @@ other — that's deliberate, the same reasoning as the sibling OpticPlan app.
 | PDF export | Straight to a chosen path | Browser print dialog |
 
 ```bash
-npm run dist:mac         # desktop app     -> release/PhotoTrack-<version>-universal-mac.zip
-npm run build:standalone # portable file   -> release/PhotoTrack-<version>-<date>.html
+npm run dist:mac                        # universal .app — must run ON a Mac (see below)
+npx electron-builder --mac zip --x64    # x64 .app — builds anywhere, incl. Linux/CI
+npm run build:standalone                # portable file -> release/PhotoTrack-<version>-<date>.html
 ```
 
-`npm run dist:mac` targets **Electron 22** specifically — the last major
-version with a macOS 10.13 build — built `--universal` so one binary runs
-natively on both an old Intel Mac and Apple Silicon. Electron 22 no longer
-gets security patches; for an offline, internal production tool that's an
-accepted tradeoff for covering 10.13 at all. Producing a real `.dmg` needs
-`hdiutil`, which is macOS-only — building from Linux produces a `.zip` of the
-`.app` instead. Unzip it and drag to Applications; being unsigned, the first
-launch needs right-click → Open once.
+Both target **Electron 22** specifically — the last major version with a
+macOS 10.13 build. Electron 22 no longer gets security patches; for an
+offline, internal production tool that's an accepted tradeoff for covering
+10.13 at all.
+
+**Which desktop build to make depends on where you're building.** Two macOS
+toolchain binaries decide this, and neither exists off a Mac:
+
+| | Needs | Result |
+| --- | --- | --- |
+| `--x64` | nothing | Runs natively on 10.13 Intel; runs on Apple Silicon under Rosetta 2 |
+| `--arm64` | `codesign` | Apple Silicon refuses to launch unsigned arm64 code, and packaging breaks Electron's own signature — so this is Mac-only in practice |
+| `--universal` | `lipo` + `codesign` | Merges both into one binary; Mac-only |
+| `dmg` target | `hdiutil` | Mac-only; elsewhere the build emits a `.zip` of the `.app` |
+
+So **building from Linux or CI, use `--x64`** — one file that covers both an
+old Intel Mac and Apple Silicon, at the cost of Rosetta translation on the
+latter. To get a native Apple Silicon or universal build, run
+`npm run dist:mac` on any Mac with Node installed.
+
+Either way the app is unsigned, so the first launch needs right-click → Open
+once. Unzip it and drag to Applications.
 
 ## Why a `.phototrack` file, not JSON
 
@@ -134,6 +149,7 @@ npm run typecheck && npm run build
   editing the exact same field on the exact same row at the same moment still
   resolves to one winner rather than a genuine three-way merge; that's an
   accepted simplification, not a bug to fix quietly later without saying so.
-- **The `.dmg` wrapper and code signing** carry the same platform
-  requirements as OpticPlan: `hdiutil` needs a real Mac, and signing needs an
-  Apple Developer ID.
+- **Native Apple Silicon, universal, and `.dmg` builds all need a Mac to
+  build on** — `lipo`, `codesign`, and `hdiutil` respectively. See the table
+  under "The two builds". The x64 build covers Apple Silicon via Rosetta 2 in
+  the meantime, and proper signing needs an Apple Developer ID either way.

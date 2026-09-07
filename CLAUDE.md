@@ -68,10 +68,12 @@ hiding everything marked `.no-print`.
 
 ## The two builds
 
-`npm run dist:mac` packages the Electron app, universal (arm64 + x64) so one
-build covers macOS 10.13 through Apple Silicon; `npm run build:standalone`
-emits the portable single HTML file. They share all of `src/` and differ
-only in what the shell provides:
+`npm run dist:mac` packages the Electron app universal (arm64 + x64) — but
+that only works **on a Mac**, since the merge needs `lipo` and Apple Silicon
+refuses to launch unsigned arm64 code. Off a Mac, build `--mac zip --x64`
+instead: it covers 10.13 Intel natively and Apple Silicon under Rosetta 2.
+`npm run build:standalone` emits the portable single HTML file. The three
+share all of `src/` and differ only in what the shell provides:
 
 - **Fonts.** The desktop app bundles IBM Plex from `src/styles/fonts.css`.
   The standalone build aliases that file to an empty one — see the alias
