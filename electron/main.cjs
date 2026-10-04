@@ -24,8 +24,8 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const https = require('node:https');
-const http = require('node:http');
+const { createElvisClient } = require('./elvisClient.cjs');
+const { electronTransport } = require('./elvisTransport.cjs');
 
 const isDev = !app.isPackaged;
 const isMac = process.platform === 'darwin';
@@ -406,10 +406,10 @@ const DEFAULT_ELVIS_CONFIG = {
   enabled: false,
   endpoint: '',
   searchPath: '/search',
-  updatePath: '/updatebulk',
+  updatePath: '/update',
   searchMethod: 'POST',
   query: '',
-  authMode: 'none',
+  authMode: 'login',
   apiKey: '',
   username: '',
   password: '',
@@ -433,116 +433,20 @@ ipcMain.handle('elvis:getConfig', async () => {
 ipcMain.handle('elvis:setConfig', async (_event, config) => {
   try {
     await writeElvisConfig(config);
+    elvis.forget();
     return { ok: true };
   } catch (error) {
     return { ok: false, error: String(error) };
   }
 });
 
-/** Minimal HTTP client — Electron 22's Node (16.x) has no global `fetch`. */
-function requestJson(urlString, { method = 'GET', headers = {}, body } = {}) {
-  return new Promise((resolve) => {
-    let url;
-    try {
-      url = new URL(urlString);
-    } catch {
-      resolve({ ok: false, error: 'Invalid URL' });
-      return;
-    }
-    const lib = url.protocol === 'http:' ? http : https;
-    const req = lib.request(
-      url,
-      { method, headers },
-      (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          let parsed;
-          try {
-            parsed = text ? JSON.parse(text) : null;
-          } catch {
-            parsed = text;
-          }
-          const status = res.statusCode ?? 0;
-          resolve({ ok: status >= 200 && status < 300, status, body: parsed });
-        });
-      },
-    );
-    req.on('error', (error) => resolve({ ok: false, error: String(error) }));
-    req.setTimeout(15_000, () => {
-      req.destroy();
-      resolve({ ok: false, error: 'Request timed out' });
-    });
-    if (body) req.write(body);
-    req.end();
-  });
-}
+// One client for the app's lifetime, so a login is reused across calls
+// rather than consuming a fresh Elvis API licence for every request.
+const elvis = createElvisClient(electronTransport);
 
-function authHeaders(config) {
-  if (config.authMode === 'apikey' && config.apiKey) {
-    return { Authorization: `Bearer ${config.apiKey}` };
-  }
-  if (config.authMode === 'basic' && config.username) {
-    const token = Buffer.from(`${config.username}:${config.password ?? ''}`).toString('base64');
-    return { Authorization: `Basic ${token}` };
-  }
-  return {};
-}
-
-/**
- * Map one Elvis search response into the generic `{id, name, thumbnailUrl,
- * metadata}` shape the renderer expects. Elvis's own response envelope
- * varies by version — this covers the common `{ hits: [...] }` and a bare
- * array, and reads metadata either flattened onto the hit or nested under
- * `metadata`, since both show up across deployments.
- */
-function normalizeHits(body) {
-  const rawHits = Array.isArray(body) ? body : Array.isArray(body?.hits) ? body.hits : [];
-  return rawHits.map((hit) => ({
-    id: String(hit.id ?? hit.assetDomain?.id ?? hit.metadata?.id ?? ''),
-    name: hit.name ?? hit.metadata?.name ?? hit.filename,
-    thumbnailUrl: hit.thumbnailUrl ?? hit.metadata?.thumbnailUrl,
-    metadata: hit.metadata ?? hit,
-  }));
-}
-
-ipcMain.handle('elvis:search', async (_event, config) => {
-  if (!config.endpoint) return { ok: false, error: 'No endpoint configured' };
-  const base = config.endpoint.replace(/\/+$/, '');
-  const searchPath = config.searchPath || '/search';
-  const headers = { ...authHeaders(config) };
-
-  let result;
-  if (config.searchMethod === 'GET') {
-    const url = new URL(base + searchPath);
-    url.searchParams.set('q', config.query || '*');
-    url.searchParams.set('num', '200');
-    result = await requestJson(url.toString(), { method: 'GET', headers });
-  } else {
-    const params = new URLSearchParams({ q: config.query || '*', num: '200' }).toString();
-    result = await requestJson(base + searchPath, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params,
-    });
-  }
-
-  if (!result.ok) return result;
-  return { ...result, hits: normalizeHits(result.body) };
-});
-
-ipcMain.handle('elvis:update', async (_event, config, assetId, metadata) => {
-  if (!config.endpoint) return { ok: false, error: 'No endpoint configured' };
-  const base = config.endpoint.replace(/\/+$/, '');
-  const updatePath = config.updatePath || '/updatebulk';
-  const payload = JSON.stringify({ selection: [assetId], metadata });
-  return requestJson(base + updatePath, {
-    method: 'POST',
-    headers: { ...authHeaders(config), 'Content-Type': 'application/json' },
-    body: payload,
-  });
-});
+ipcMain.handle('elvis:test', async (_event, config) => elvis.test(config));
+ipcMain.handle('elvis:search', async (_event, config) => elvis.search(config));
+ipcMain.handle('elvis:update', async (_event, config, assetId, metadata) => elvis.update(config, assetId, metadata));
 
 /* ------------------------------------------------------------------ *
  * Lifecycle

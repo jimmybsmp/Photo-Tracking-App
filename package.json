@@ -14,7 +14,8 @@
     "desktop:build": "npm run build && electron-builder",
     "build:standalone": "vite build --config vite.standalone.config.ts && node scripts/build-standalone.mjs",
     "dist:mac": "npm run build && electron-builder --mac --universal",
-    "check:file-protocol": "node scripts/check-file-protocol.mjs"
+    "check:file-protocol": "node scripts/check-file-protocol.mjs",
+    "test:elvis": "node scripts/test-elvis.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

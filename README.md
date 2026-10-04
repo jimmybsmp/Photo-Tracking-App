@@ -103,24 +103,38 @@ timestamp for all of it — whichever export touched it last wins as a whole).
 
 ## WoodWing Elvis sync
 
-The **Elvis Sync…** panel (desktop app only — see the table above) is real,
-working plumbing: it can search Elvis for assets, map custom metadata fields
-onto rows through the exact same per-field merge a delta import uses, and
-write pipeline/usage state back. What it does **not** ship with is a
-confirmed connection to any specific server — the endpoint, the auth method,
-the search/update paths, and every custom field name are settings, defaulted
-to plausible guesses (the same ones the original tool hardcoded, never
-verified against a real Elvis instance). Before it does anything against a
-production DAM:
+The **Elvis Sync…** panel (desktop app only — see the table above) searches
+Elvis for assets, maps custom metadata onto rows through the same per-field
+merge a delta import uses, and writes pipeline/usage state back.
 
-1. Get the base URL, and confirm with whoever administers Elvis whether the
-   service account authenticates with an API key, HTTP Basic, or something
-   else — Elvis versions differ here.
-2. Confirm the actual custom-field names for usage placement, shot type,
-   spread/slide number, and the five pipeline stages, and that the account
-   can write them.
-3. Use **Test connection** before **Pull now** — it does one bounded search
-   and reports what came back, without touching any row.
+**Setting it up:**
+
+1. **Server endpoint** — the address you open Elvis at in a browser is fine
+   (`https://dam.company.com`); the app adds `/services` itself. A custom
+   context path such as `https://host/elvis/services` is kept as typed.
+2. **Auth: Username & password** — this is how Elvis authenticates. The app
+   logs in at `/services/login` and reuses the session for every later call,
+   handling both Elvis 6 / Assets (auth token) and Elvis 5 (session cookie +
+   CSRF token) automatically. Note that each login takes one of the server's
+   API licences; if a correct password is still refused, ask the Elvis
+   administrator whether any are free.
+3. **Test connection** — runs three steps (address → log in → a one-asset
+   search) and shows exactly which one failed, the URL it tried, and what
+   that error usually means. Nothing in the project is touched.
+4. **Custom field names** — confirm the `cf_…` names for usage placement,
+   shot type, spread/slide, and the five pipeline stages with whoever
+   administers Elvis, and that the account can write them, before using
+   **Push changed rows**.
+
+**Before blaming the app on an air-gapped Mac:** the Elvis server has to be on
+the same isolated network. A WoodWing-hosted (cloud) Elvis is unreachable from
+an air-gapped machine by definition — the test will fail at the login step
+with "can't find a server". Requests go through macOS's own network stack, so
+a company-issued HTTPS certificate works once its root is trusted in Keychain
+Access, and the system proxy settings are honoured.
+
+`npm run test:elvis` exercises the client against a strict mock server in both
+Elvis dialects.
 
 Credentials are stored in a local config file the desktop app owns,
 encrypted at rest with Electron's `safeStorage` (the OS keychain on macOS).

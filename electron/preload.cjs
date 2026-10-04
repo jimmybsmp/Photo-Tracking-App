@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('phototrack', {
   /* WoodWing Elvis sync — see electron/main.cjs for why this runs here */
   elvisGetConfig: () => ipcRenderer.invoke('elvis:getConfig'),
   elvisSetConfig: (config) => ipcRenderer.invoke('elvis:setConfig', config),
+  elvisTest: (config) => ipcRenderer.invoke('elvis:test', config),
   elvisSearch: (config) => ipcRenderer.invoke('elvis:search', config),
   elvisUpdate: (config, assetId, metadata) => ipcRenderer.invoke('elvis:update', config, assetId, metadata),
 });

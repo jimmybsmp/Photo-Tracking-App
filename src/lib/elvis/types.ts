@@ -35,7 +35,12 @@ export const DEFAULT_ELVIS_FIELD_MAP: ElvisFieldMap = {
   approved: 'cf_approved',
 };
 
-export type ElvisAuthMode = 'none' | 'apikey' | 'basic';
+/**
+ * `login` is the one Elvis actually documents: username + password POSTed to
+ * `/services/login`, answered with a token or session the app reuses. The
+ * others are escape hatches for a server fronted by something unusual.
+ */
+export type ElvisAuthMode = 'login' | 'apikey' | 'basic' | 'none';
 export type ElvisSearchMethod = 'GET' | 'POST';
 
 export interface ElvisConfig {
@@ -59,10 +64,10 @@ export const defaultElvisConfig: ElvisConfig = {
   enabled: false,
   endpoint: '',
   searchPath: '/search',
-  updatePath: '/updatebulk',
+  updatePath: '/update',
   searchMethod: 'POST',
   query: '',
-  authMode: 'none',
+  authMode: 'login',
   apiKey: '',
   username: '',
   password: '',
@@ -79,6 +84,25 @@ export interface ElvisHit {
 export interface ElvisRequestResult {
   ok: boolean;
   status?: number;
-  body?: unknown;
+  /** Which step failed: address, login, search, update. */
+  stage?: string;
+  /** The exact URL that was tried, for checking against what the admin expects. */
+  url?: string;
   error?: string;
+  /** A plain-language explanation of what usually causes this error. */
+  hint?: string | null;
+}
+
+export interface ElvisTestStep {
+  ok: boolean;
+  label: string;
+  detail?: string;
+  hint?: string | null;
+  url?: string;
+}
+
+export interface ElvisTestResult {
+  ok: boolean;
+  steps: ElvisTestStep[];
+  totalHits?: number;
 }

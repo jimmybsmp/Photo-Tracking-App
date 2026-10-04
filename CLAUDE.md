@@ -43,7 +43,8 @@ same build split, same reasons for both.
 - **Elvis credentials never leave the desktop app's config file.** They are
   not part of `TrackerDocument`, so they can never end up in a `.phototrack`
   save, a `.ptdelta` export, or the crash-recovery file. The request itself
-  only ever originates in `electron/main.cjs` — never call
+  only ever originates in the main process (`electron/elvisClient.cjs` for
+  the protocol, `electron/elvisTransport.cjs` for Electron's `net`) — never call
   `window.phototrack.elvis*` assuming it exists without checking
   `isDesktop()` first, and never add a fetch to Elvis from a component.
 - **It has to work offline.** No CDN, no runtime network calls except the
@@ -54,8 +55,23 @@ same build split, same reasons for both.
 ## Before pushing
 
 ```bash
-npm run typecheck && npm run build
+npm run typecheck && npm run build && npm run test:elvis
 ```
+
+`npm run build` also asserts the output loads from `file://` — see
+`scripts/check-file-protocol.mjs` for the three ways it silently doesn't.
+
+## Elvis protocol
+
+Elvis has no static API key: log in with username + password at
+`/services/login`, then send the returned `authToken` as a Bearer header
+(Elvis 6 / Assets) or keep the session cookie and send `X-CSRF-TOKEN`
+(Elvis 5). Writes are **form parameters** — `update` takes `id` plus
+`metadata` as a JSON *string*; `updatebulk` takes `q` instead of `id`. Keep
+network calls on Electron's `net`, not Node's `https`: only `net` trusts the
+macOS Keychain and the system proxy, which a company-hosted DAM usually
+needs. `scripts/mock-elvis-server.mjs` is strict about all of this on purpose
+— if a change makes it fail, a real server would fail too.
 
 ## Design
 

@@ -759,3 +759,45 @@ button {
     cursor: pointer;
   }
 }
+
+@layer components {
+  /* --- Elvis connection test ------------------------------------------- */
+  .elvis-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .elvis-steps li,
+  .elvis-failure {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: var(--chrome-900);
+    border-left: 3px solid var(--chrome-600);
+    font-size: 12px;
+  }
+  .elvis-step-ok {
+    border-left-color: var(--ok) !important;
+  }
+  .elvis-step-fail {
+    border-left-color: var(--bad) !important;
+  }
+  .elvis-step-detail {
+    color: var(--chrome-100);
+    word-break: break-word;
+  }
+  .elvis-step-url {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--chrome-300);
+    word-break: break-all;
+  }
+  .elvis-step-hint {
+    color: var(--warn);
+  }
+}

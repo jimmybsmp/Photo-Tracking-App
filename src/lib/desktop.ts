@@ -15,7 +15,7 @@
  * base64 round trip.
  */
 
-import type { ElvisConfig, ElvisHit, ElvisRequestResult } from './elvis/types';
+import type { ElvisConfig, ElvisHit, ElvisRequestResult, ElvisTestResult } from './elvis/types';
 
 export interface SaveResult {
   ok: boolean;
@@ -70,7 +70,9 @@ export interface DesktopBridge {
    */
   elvisGetConfig(): Promise<ElvisConfig>;
   elvisSetConfig(config: ElvisConfig): Promise<{ ok: boolean }>;
-  elvisSearch(config: ElvisConfig): Promise<ElvisRequestResult & { hits?: ElvisHit[] }>;
+  /** Address → log in → one-hit search, reporting each step. */
+  elvisTest(config: ElvisConfig): Promise<ElvisTestResult>;
+  elvisSearch(config: ElvisConfig): Promise<ElvisRequestResult & { hits?: ElvisHit[]; totalHits?: number }>;
   elvisUpdate(config: ElvisConfig, assetId: string, metadata: Record<string, unknown>): Promise<ElvisRequestResult>;
 }
 

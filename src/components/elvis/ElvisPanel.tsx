@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { desktop, isDesktop } from '@/lib/desktop';
-import { defaultElvisConfig, type ElvisConfig } from '@/lib/elvis/types';
+import { defaultElvisConfig, type ElvisConfig, type ElvisRequestResult, type ElvisTestStep } from '@/lib/elvis/types';
 import { mergeElvisHits, metadataPatchForRow } from '@/lib/elvis/sync';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { Button, TextInput } from '@/components/ui/controls';
@@ -18,6 +18,8 @@ import { Button, TextInput } from '@/components/ui/controls';
 export function ElvisPanel({ onClose }: { onClose: () => void }) {
   const [config, setConfig] = useState<ElvisConfig>(defaultElvisConfig);
   const [status, setStatus] = useState<string>('');
+  const [steps, setSteps] = useState<ElvisTestStep[]>([]);
+  const [failure, setFailure] = useState<ElvisRequestResult | null>(null);
   const [busy, setBusy] = useState(false);
   const doc = useTrackerStore((s) => s.doc);
   const applyMergedDoc = useTrackerStore((s) => s.applyMergedDoc);
@@ -33,17 +35,23 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
     await desktop()?.elvisSetConfig(next);
   }
 
+  function reset(message: string) {
+    setStatus(message);
+    setSteps([]);
+    setFailure(null);
+  }
+
   async function handleTest() {
     const bridge = desktop();
     if (!bridge) return;
     setBusy(true);
-    setStatus('Testing…');
+    reset('Testing…');
     try {
-      const result = await bridge.elvisSearch({ ...config, query: config.query || '*' });
-      if (result.ok) setStatus(`Connected — ${result.hits?.length ?? 0} asset(s) matched the query.`);
-      else setStatus(`Failed: HTTP ${result.status ?? '—'} ${result.error ?? ''}`.trim());
+      const result = await bridge.elvisTest(config);
+      setSteps(result.steps);
+      setStatus(result.ok ? 'Connected. Pull now is safe to run.' : 'Not connected — see the step that failed.');
     } catch (err) {
-      setStatus(`Failed: ${String(err)}`);
+      setStatus(`Test failed: ${String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -53,11 +61,12 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
     const bridge = desktop();
     if (!bridge) return;
     setBusy(true);
-    setStatus('Pulling…');
+    reset('Pulling…');
     try {
       const result = await bridge.elvisSearch(config);
       if (!result.ok || !result.hits) {
-        setStatus(`Pull failed: HTTP ${result.status ?? '—'} ${result.error ?? ''}`.trim());
+        setStatus('Pull failed.');
+        setFailure(result);
         return;
       }
       const { doc: merged, summary } = mergeElvisHits(doc, result.hits, config.fieldMap);
@@ -82,15 +91,20 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
       return;
     }
     setBusy(true);
-    setStatus(`Pushing ${rows.length} row(s)…`);
+    reset(`Pushing ${rows.length} row(s)…`);
     let ok = 0;
     let failed = 0;
+    let firstFailure: ElvisRequestResult | null = null;
     for (const row of rows) {
       const result = await bridge.elvisUpdate(config, row.elvisAssetId, metadataPatchForRow(row, config.fieldMap));
       if (result.ok) ok++;
-      else failed++;
+      else {
+        failed++;
+        firstFailure ??= result;
+      }
     }
     setStatus(`Pushed: ${ok} succeeded, ${failed} failed.`);
+    setFailure(firstFailure);
     setBusy(false);
   }
 
@@ -129,7 +143,7 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
           <span>Server endpoint</span>
           <TextInput
             value={config.endpoint}
-            placeholder="https://dam.yourcompany.com/services"
+            placeholder="https://dam.yourcompany.com/services — the address you use in a browser works too"
             onChange={(e) => void save({ ...config, endpoint: e.target.value })}
           />
         </label>
@@ -169,9 +183,10 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
           <label className="inspector-field">
             <span>Auth</span>
             <select className="field" value={config.authMode} onChange={(e) => void save({ ...config, authMode: e.target.value as ElvisConfig['authMode'] })}>
-              <option value="none">None</option>
-              <option value="apikey">API key (header)</option>
-              <option value="basic">Basic auth</option>
+              <option value="login">Username &amp; password (Elvis login)</option>
+              <option value="apikey">Bearer token (advanced)</option>
+              <option value="basic">HTTP Basic (advanced)</option>
+              <option value="none">None (advanced)</option>
             </select>
           </label>
           {config.authMode === 'apikey' && (
@@ -180,7 +195,7 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
               <TextInput type="password" value={config.apiKey} onChange={(e) => void save({ ...config, apiKey: e.target.value })} />
             </label>
           )}
-          {config.authMode === 'basic' && (
+          {(config.authMode === 'login' || config.authMode === 'basic') && (
             <>
               <label className="inspector-field">
                 <span>Username</span>
@@ -221,6 +236,29 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
           </Button>
         </div>
         {status && <p className="inspector-hint">{status}</p>}
+
+        {steps.length > 0 && (
+          <ol className="elvis-steps">
+            {steps.map((step) => (
+              <li key={step.label} className={step.ok ? 'elvis-step-ok' : 'elvis-step-fail'}>
+                <strong>
+                  {step.ok ? '✓' : '✗'} {step.label}
+                </strong>
+                {step.detail && <span className="elvis-step-detail">{step.detail}</span>}
+                {step.url && <code className="elvis-step-url">{step.url}</code>}
+                {step.hint && <span className="elvis-step-hint">{step.hint}</span>}
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {failure && (
+          <div className="elvis-step-fail elvis-failure">
+            <span className="elvis-step-detail">{failure.error ?? 'Unknown error'}</span>
+            {failure.url && <code className="elvis-step-url">{failure.url}</code>}
+            {failure.hint && <span className="elvis-step-hint">{failure.hint}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
