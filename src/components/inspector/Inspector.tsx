@@ -1,169 +1,179 @@
+import { useRef } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
-import { applicableStages } from '@/state/selectors';
-import { importImageFile } from '@/lib/images';
-import { TextInput } from '@/components/ui/controls';
-import { PipelineToggle } from '@/components/ui/PipelineToggle';
-import { PIPELINE_STAGES, type RowFieldPath, type ShotType, type Usage } from '@/state/schema';
-import type { Side } from '@/state/selectors';
+import { activeSides, applicableStages, nextStage, sideProgress } from '@/state/selectors';
+import { SIDE_LABELS, STAGE_LABELS, stagePath, type RowFieldPath, type ShotRow, type ShotType, type Side, type Usage } from '@/state/schema';
+import { stampTime } from '@/lib/format';
+import { useFileImport } from '@/components/grid/useFileImport';
+import { CommentThread } from './CommentThread';
 
 /**
- * Full editor for one row. Every field switch here is deliberately non-
- * destructive: switching usage away from a side, or a shot to a longshot,
- * never clears that side's position, retoucher, or pipeline state — the old
- * tool cleared the position field on a usage switch and reset three pipeline
- * toggles on every load for a longshot. Switching back always shows the same
- * values that were there before.
+ * Everything about one shot. Switching usage or shot type is purely a display
+ * decision: hiding a property, or a longshot's last three stages, never
+ * clears what was entered — switching back shows the same values again.
  */
 export function Inspector() {
-  const activeRowId = useTrackerStore((s) => s.activeRowId);
-  const row = useTrackerStore((s) => (activeRowId ? s.doc.rows[activeRowId] : undefined));
-  const asset = useTrackerStore((s) => (row?.imageHash ? s.doc.assets[row.imageHash] : undefined));
+  const rowId = useTrackerStore((s) => s.activeRowId);
+  const row = useTrackerStore((s) => (rowId ? s.doc.rows[rowId] : undefined));
+  const reviewUrl = useTrackerStore((s) => (row?.imageHash ? s.doc.assets[row.imageHash]?.reviewUrl : undefined));
   const setField = useTrackerStore((s) => s.setField);
-  const setUsage = useTrackerStore((s) => s.setUsage);
-  const setShotType = useTrackerStore((s) => s.setShotType);
-  const togglePipeline = useTrackerStore((s) => s.togglePipeline);
-  const assignImage = useTrackerStore((s) => s.assignImage);
+  const openRow = useTrackerStore((s) => s.openRow);
   const deleteRows = useTrackerStore((s) => s.deleteRows);
-  const setActiveRow = useTrackerStore((s) => s.setActiveRow);
+  const { importInto } = useFileImport();
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  if (!row || !activeRowId) return null;
-  const rowId = activeRowId;
-
-  const stages = applicableStages(row);
-  const sidesToShow: Side[] = row.usage === 'both' ? ['mag', 'pr'] : row.usage === 'pr' ? ['pr'] : row.usage === 'mag' ? ['mag'] : [];
-
-  async function handleReplace(file: File | undefined) {
-    if (!file) return;
-    try {
-      const asset = await importImageFile(file);
-      assignImage(rowId, asset);
-    } catch (err) {
-      console.warn('Could not import image', file.name, err);
-    }
-  }
+  if (!row || !rowId) return null;
+  const sides = activeSides(row);
+  const text = (path: RowFieldPath, value: string) => setField(rowId, path, value, { typing: true });
 
   return (
-    <aside className="inspector">
-      <div className="inspector-header">
-        <h2>Shot {row.shotNum || '—'}</h2>
-        <button type="button" className="btn-icon" onClick={() => setActiveRow(null)} title="Close">
+    <aside className="inspector no-print">
+      <div className="inspector-head">
+        <div>
+          <h2>{row.shotNum || row.elvisName || 'Untitled shot'}</h2>
+          {row.elvisAssetId && (
+            <span className="muted small" title={row.elvisAssetId}>
+              Elvis · {row.elvisPath ? `${row.elvisPath}/` : ''}
+              {row.elvisName}
+            </span>
+          )}
+        </div>
+        <button className="icon-btn" onClick={() => openRow(null)} title="Close (Esc)">
           ✕
         </button>
       </div>
 
-      <div className="inspector-preview">
-        {asset ? <img src={asset.reviewUrl} alt="" /> : <div className="inspector-preview-empty">No photo yet</div>}
-        <label className="btn btn-sm">
-          {asset ? 'Replace photo' : 'Add photo'}
-          <input
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={(e) => void handleReplace(e.target.files?.[0])}
-          />
-        </label>
-      </div>
+      <div className="inspector-scroll">
+        <div className="preview">
+          {reviewUrl ? <img src={reviewUrl} alt="" /> : <div className="preview-empty">No photo</div>}
+          <button className="btn btn-sm" onClick={() => fileRef.current?.click()}>
+            {reviewUrl ? 'Replace photo' : 'Add photo'}
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => void importInto(rowId, e.target.files?.[0])} />
+        </div>
 
-      <label className="inspector-field">
-        <span>Shot #</span>
-        <TextInput
-          value={row.shotNum}
-          placeholder="e.g. 02C1234"
-          onChange={(e) => setField(rowId, 'shotNum', e.target.value)}
-        />
-      </label>
-
-      <label className="inspector-field">
-        <span>Shot type</span>
-        <select className="field" value={row.shotType} onChange={(e) => setShotType(rowId, e.target.value as ShotType)}>
-          <option value="unassigned">— Select —</option>
-          <option value="longshot">Longshot</option>
-          <option value="closeup">Close-up</option>
-        </select>
-      </label>
-
-      <label className="inspector-field">
-        <span>Usage placement</span>
-        <select className="field" value={row.usage} onChange={(e) => setUsage(rowId, e.target.value as Usage)}>
-          <option value="none">— Unassigned —</option>
-          <option value="mag">Magazine</option>
-          <option value="pr">Press release</option>
-          <option value="both">Both</option>
-        </select>
-      </label>
-
-      {sidesToShow.length === 0 && (
-        <p className="inspector-hint">Set a usage placement to track spread/slide number, retoucher, and pipeline for this shot.</p>
-      )}
-
-      {sidesToShow.map((side) => (
-        <div key={side} className="inspector-side">
-          <h3>{side === 'mag' ? 'Magazine' : 'Press release'}</h3>
-
-          <label className="inspector-field">
-            <span>{side === 'mag' ? 'Spread #' : 'Slide #'}</span>
-            <TextInput
-              value={row[side].position}
-              onChange={(e) => setField(rowId, `${side}.position` as RowFieldPath, e.target.value)}
-            />
+        <div className="form-grid">
+          <label className="field-label">
+            <span>Shot #</span>
+            <input className="field" value={row.shotNum} onChange={(e) => text('shotNum', e.target.value)} placeholder="e.g. 02C1234" />
           </label>
-
-          <label className="inspector-field">
-            <span>Select type</span>
-            <select
-              className="field"
-              value={row[side].selectType}
-              onChange={(e) => setField(rowId, `${side}.selectType` as RowFieldPath, e.target.value)}
-            >
-              <option value="main">Main select</option>
-              <option value="alt">Alt shot</option>
+          <label className="field-label">
+            <span>Shot type</span>
+            <select className="field field-select" value={row.shotType} onChange={(e) => setField(rowId, 'shotType', e.target.value as ShotType)}>
+              <option value="unassigned">Not set</option>
+              <option value="closeup">Close-up</option>
+              <option value="longshot">Longshot</option>
             </select>
           </label>
+        </div>
 
-          <label className="inspector-field">
-            <span>Retoucher</span>
-            <TextInput
-              value={row[side].retoucher}
-              placeholder="Initials / name"
-              onChange={(e) => setField(rowId, `${side}.retoucher` as RowFieldPath, e.target.value)}
-            />
-          </label>
-
-          <div className="inspector-pipeline">
-            {PIPELINE_STAGES.map((stage) => (
-              <PipelineToggle
-                key={stage}
-                stage={stage}
-                done={row[side].pipeline[stage]}
-                applicable={stages.includes(stage)}
-                onToggle={() => togglePipeline(rowId, side, stage)}
-              />
+        <div className="field-label">
+          <span>Runs in</span>
+          <div className="segmented">
+            {(
+              [
+                ['mag', 'Magazine'],
+                ['pr', 'Press release'],
+                ['both', 'Both'],
+                ['none', 'Neither yet'],
+              ] as Array<[Usage, string]>
+            ).map(([value, label]) => (
+              <button key={value} className={row.usage === value ? 'seg-active' : ''} onClick={() => setField(rowId, 'usage', value)}>
+                {label}
+              </button>
             ))}
           </div>
         </div>
-      ))}
 
-      <label className="inspector-field">
-        <span>Notes</span>
-        <textarea
-          className="field"
-          rows={3}
-          value={row.notes}
-          onChange={(e) => setField(rowId, 'notes', e.target.value)}
-        />
-      </label>
+        {sides.map((side) => (
+          <PropertySection key={side} row={row} side={side} />
+        ))}
+        {sides.length === 0 && <p className="muted small">Choose where this shot runs to track its progress.</p>}
 
-      {row.elvisAssetId && <p className="inspector-hint">WoodWing Elvis asset: {row.elvisAssetId}</p>}
+        <label className="field-label">
+          <span>Description</span>
+          <textarea className="field" rows={2} value={row.notes} onChange={(e) => text('notes', e.target.value)} placeholder="What the shot is, anything fixed about it…" />
+        </label>
 
-      <button
-        type="button"
-        className="btn btn-danger"
-        onClick={() => {
-          if (confirm('Delete this shot? Undo with Cmd+Z.')) deleteRows([rowId]);
-        }}
-      >
-        Delete shot
-      </button>
+        <section className="inspector-section">
+          <h3>Notes &amp; concerns</h3>
+          <CommentThread key={row.id} row={row} />
+        </section>
+
+        <button
+          className="btn btn-danger btn-sm delete-shot"
+          onClick={() => {
+            if (confirm('Delete this shot? Undo with ⌘Z.')) deleteRows([rowId]);
+          }}
+        >
+          Delete shot
+        </button>
+      </div>
     </aside>
+  );
+}
+
+function PropertySection({ row, side }: { row: ShotRow; side: Side }) {
+  const setField = useTrackerStore((s) => s.setField);
+  const toggleStage = useTrackerStore((s) => s.toggleStage);
+  const stages = applicableStages(row);
+  const next = nextStage(row, side);
+  const { done, total } = sideProgress(row, side);
+  const p = row[side];
+  const text = (path: RowFieldPath, value: string) => setField(row.id, path, value, { typing: true });
+
+  return (
+    <section className={`property-section property-${side}`}>
+      <header>
+        <h3>{SIDE_LABELS[side]}</h3>
+        <span className={`status-text ${next ? '' : 'status-complete'}`}>{next ? `Waiting on ${STAGE_LABELS[next]}` : 'Complete'}</span>
+        <span className="muted small">
+          {done}/{total}
+        </span>
+      </header>
+
+      <div className="form-grid">
+        <label className="field-label">
+          <span>{side === 'mag' ? 'Spread #' : 'Slide #'}</span>
+          <input className="field" value={p.position} onChange={(e) => text(`${side}.position` as RowFieldPath, e.target.value)} />
+        </label>
+        <label className="field-label">
+          <span>Select</span>
+          <select className="field field-select" value={p.selectType} onChange={(e) => setField(row.id, `${side}.selectType` as RowFieldPath, e.target.value)}>
+            <option value="main">Main select</option>
+            <option value="alt">Alt shot</option>
+          </select>
+        </label>
+        <label className="field-label form-span">
+          <span>Retoucher</span>
+          <input className="field" value={p.retoucher} onChange={(e) => text(`${side}.retoucher` as RowFieldPath, e.target.value)} placeholder="Name or initials" />
+        </label>
+      </div>
+
+      <ul className="checklist">
+        {stages.map((stage, i) => {
+          const isDone = p.pipeline[stage];
+          const stamp = row.fieldTimes[stagePath(side, stage)];
+          return (
+            <li key={stage}>
+              <button className={`check ${isDone ? 'check-done' : ''} ${stage === next ? 'check-next' : ''}`} onClick={() => toggleStage(row.id, side, stage)}>
+                <span className="check-box">{isDone ? '✓' : ''}</span>
+                <span className="check-label">{STAGE_LABELS[stage]}</span>
+                <span className="check-key muted small" title="Keyboard shortcut">
+                  {side === 'pr' && row.usage === 'both' ? '⇧' : ''}
+                  {i + 1}
+                </span>
+              </button>
+              {stamp?.u && stamp.t > 1 && (
+                <span className="check-who muted small">
+                  {isDone ? '' : 'unchecked · '}
+                  {stamp.u} · {stampTime(stamp.t)}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {row.shotType === 'longshot' && <p className="muted small">Longshot — assembly, submission and approval don't apply.</p>}
+    </section>
   );
 }

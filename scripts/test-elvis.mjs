@@ -25,9 +25,11 @@ function nodeTransport() {
           const [k, v] = pair.split('=');
           jar.set(k.trim(), v);
         }
-        let text = '';
-        res.on('data', (c) => (text += c));
-        res.on('end', () => resolve({ status: res.statusCode, bodyText: text }));
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () =>
+          resolve({ status: res.statusCode, contentType: res.headers['content-type'] || '', body: Buffer.concat(chunks) }),
+        );
       });
       req.on('error', reject);
       if (body) req.write(body);
@@ -94,6 +96,27 @@ for (const dialect of ['token', 'cookie']) {
   check('wrong password fails at the login step', !bad.ok && loginStep && !loginStep.ok, bad.steps);
   check('…with the server’s own message', /Invalid username or password/.test(loginStep?.detail || ''), loginStep);
 
+  await server.close();
+}
+
+console.log('\npaging, images, field discovery');
+{
+  const server = await startMockElvis({ assetCount: 450, pageCap: 200 });
+  const client = createElvisClient(nodeTransport());
+  const cfg = config(server.origin);
+  const all = await client.search(cfg);
+  check('a 450-asset query is read in full across pages', all.ok && all.hits.length === 450 && new Set(all.hits.map((h) => h.id)).size === 450, all.hits?.length);
+  check('hits carry preview urls', /preview\/A1/.test(all.hits?.[0]?.previewUrl || ''));
+  const img = await client.fetchImage(cfg, all.hits[0].previewUrl);
+  check('preview downloads as image bytes', img.ok && img.mime === 'image/jpeg' && img.bytes[0] === 0xff && img.bytes[1] === 0xd8, img);
+  const foreign = await client.fetchImage(cfg, 'https://elsewhere.example/steal.jpg');
+  check('refuses to send the login to another host', !foreign.ok && /Refusing/.test(foreign.error), foreign);
+  const test = await client.test(cfg);
+  const names = (test.sampleFields || []).map((f) => f.name);
+  check('connection test lists the fields assets really have', names.includes('filename') && names.includes('cf_spreadNum'), names);
+  await client.update(cfg, 'A1', { cf_photoTrack: '{"x":1}' });
+  const after = await client.search(cfg, { num: 1 });
+  check('a write is visible on the next search', after.hits?.[0]?.metadata?.cf_photoTrack === '{"x":1}', after.hits?.[0]?.metadata);
   await server.close();
 }
 

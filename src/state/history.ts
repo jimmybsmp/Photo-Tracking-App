@@ -15,7 +15,8 @@ import type { TrackerDocument } from './schema';
  * all of its structure.
  */
 
-const LIMIT = 60;
+const LIMIT = 100;
+const COALESCE_MS = 1500;
 
 let past: TrackerDocument[] = [];
 let future: TrackerDocument[] = [];
@@ -39,6 +40,13 @@ export function startHistory(): () => void {
     if (travelling) return;
     if (state.revision === prev.revision) return;
     if (state.doc === prev.doc) return;
+
+    // Typing into one field is one edit, not one per keystroke: while the
+    // same field keeps changing with under COALESCE_MS between keys, the
+    // snapshot from before the first keystroke stays the undo target.
+    const a = prev.lastEdit;
+    const b = state.lastEdit;
+    if (a && b && a !== b && a.key === b.key && b.at - a.at < COALESCE_MS) return;
 
     past.push(prev.doc);
     if (past.length > LIMIT) past.shift();

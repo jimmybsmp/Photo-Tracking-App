@@ -52,4 +52,5 @@ contextBridge.exposeInMainWorld('phototrack', {
   elvisTest: (config) => ipcRenderer.invoke('elvis:test', config),
   elvisSearch: (config) => ipcRenderer.invoke('elvis:search', config),
   elvisUpdate: (config, assetId, metadata) => ipcRenderer.invoke('elvis:update', config, assetId, metadata),
+  elvisFetchImage: (config, url) => ipcRenderer.invoke('elvis:fetchImage', config, url),
 });

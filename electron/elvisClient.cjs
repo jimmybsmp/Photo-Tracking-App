@@ -23,6 +23,10 @@
  */
 
 const DEFAULT_TIMEOUT_NOTE = 'no response within 20 seconds';
+const PAGE_SIZE = 200;
+const SAMPLE_SIZE = 10;
+/** Upper bound on one pull — far beyond one shoot, short of runaway. */
+const MAX_ASSETS = 10000;
 
 /**
  * Normalise what someone typed into a base URL that ends at `/services`.
@@ -161,13 +165,14 @@ function createElvisClient(transport) {
       const message = String(error && error.message ? error.message : error);
       return { ok: false, stage, url, error: message, hint: explainNetworkError(message, url) };
     }
+    const bodyText = Buffer.isBuffer(response.body) ? response.body.toString('utf8') : String(response.body ?? '');
 
-    const json = parseJson(response.bodyText);
+    const json = parseJson(bodyText);
     const inBody = bodyError(json);
     const status = inBody ? inBody.status : response.status;
     const ok = !inBody && response.status >= 200 && response.status < 300;
     if (!ok) {
-      const snippet = inBody ? inBody.message : String(response.bodyText || '').slice(0, 300);
+      const snippet = inBody ? inBody.message : bodyText.slice(0, 300);
       return {
         ok: false,
         stage,
@@ -253,25 +258,78 @@ function createElvisClient(transport) {
       const metadata = hit.metadata || hit;
       return {
         id: String(hit.id ?? metadata.id ?? ''),
-        name: metadata.name ?? metadata.filename ?? hit.name,
+        name: metadata.filename ?? metadata.name ?? hit.name,
         thumbnailUrl: hit.thumbnailUrl ?? metadata.thumbnailUrl,
+        previewUrl: hit.previewUrl ?? metadata.previewUrl,
         metadata,
       };
     });
   }
 
-  async function search(config, { num = 200 } = {}) {
+  async function searchPage(config, { num, start }) {
     const resolved = resolveBase(config.endpoint);
     if (!resolved.ok) return { ok: false, stage: 'address', error: resolved.error };
     const method = config.searchMethod === 'GET' ? 'GET' : 'POST';
     const result = await authed('search', resolved.base, config, config.searchPath || '/search', {
       method,
-      params: { q: config.query || '*', num, metadataToReturn: 'all' },
+      params: { q: config.query || '*', start, num, metadataToReturn: 'all' },
     });
     if (!result.ok) return result;
     const hits = normalizeHits(result.body);
     const totalHits = result.body && typeof result.body.totalHits === 'number' ? result.body.totalHits : hits.length;
     return { ok: true, url: result.url, status: result.status, hits, totalHits };
+  }
+
+  /**
+   * Every asset the query matches, a page at a time. Elvis caps how many
+   * hits one request returns, so a shoot bigger than one page would silently
+   * lose its tail without this.
+   */
+  async function search(config, { num, limit = MAX_ASSETS } = {}) {
+    if (num) return searchPage(config, { num, start: 0 });
+    const hits = [];
+    let totalHits = 0;
+    let url;
+    for (let start = 0; start < limit; start += PAGE_SIZE) {
+      const page = await searchPage(config, { num: PAGE_SIZE, start });
+      if (!page.ok) return page;
+      url = page.url;
+      totalHits = page.totalHits;
+      hits.push(...page.hits);
+      if (page.hits.length < PAGE_SIZE || hits.length >= totalHits) break;
+    }
+    return { ok: true, url, hits, totalHits, truncated: totalHits > hits.length };
+  }
+
+  /**
+   * Download a preview or thumbnail. Only from the configured Elvis server:
+   * the request carries the login, and a URL supplied in a search result
+   * must never be able to send that login to some other host.
+   */
+  async function fetchImage(config, imageUrl) {
+    const resolved = resolveBase(config.endpoint);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    let target;
+    try {
+      target = new URL(imageUrl, resolved.base + '/');
+    } catch {
+      return { ok: false, error: 'Invalid image address' };
+    }
+    if (target.origin !== new URL(resolved.base).origin) {
+      return { ok: false, error: `Refusing to send the Elvis login to ${target.origin}` };
+    }
+    const auth = await authHeadersFor(resolved.base, config);
+    if (!auth.ok) return auth;
+    let response;
+    try {
+      response = await transport({ url: target.toString(), method: 'GET', headers: { ...auth.headers, Accept: 'image/*' } });
+    } catch (error) {
+      return { ok: false, error: String(error && error.message ? error.message : error) };
+    }
+    if (response.status < 200 || response.status >= 300) return { ok: false, status: response.status, error: `HTTP ${response.status}` };
+    const contentType = String(response.contentType || '').split(';')[0].trim();
+    if (contentType && !contentType.startsWith('image/')) return { ok: false, error: `Not an image (${contentType})` };
+    return { ok: true, bytes: new Uint8Array(response.body), mime: contentType || 'image/jpeg' };
   }
 
   async function update(config, assetId, metadata) {
@@ -311,7 +369,7 @@ function createElvisClient(transport) {
       steps.push({ ok: true, label: 'Log in', detail: config.authMode === 'none' ? 'Skipped — no authentication selected' : `Using ${config.authMode} credentials` });
     }
 
-    const found = await search(config, { num: 1 });
+    const found = await search(config, { num: SAMPLE_SIZE });
     if (!found.ok) {
       steps.push({ ok: false, label: 'Search', detail: found.error, hint: found.hint, url: found.url });
       return { ok: false, steps };
@@ -321,14 +379,32 @@ function createElvisClient(transport) {
       label: 'Search',
       detail: `Query "${config.query || '*'}" matches ${found.totalHits} asset${found.totalHits === 1 ? '' : 's'}`,
     });
-    return { ok: true, steps, totalHits: found.totalHits };
+    return { ok: true, steps, totalHits: found.totalHits, sampleFields: sampleFields(found.hits) };
+  }
+
+  /**
+   * The metadata fields actually present on a few matching assets, with an
+   * example value each — so mapping is picking from what the server really
+   * has, instead of guessing at names.
+   */
+  function sampleFields(hits) {
+    const seen = new Map();
+    for (const hit of hits) {
+      for (const [name, value] of Object.entries(hit.metadata || {})) {
+        if (seen.has(name) || value === null || value === undefined || value === '') continue;
+        let sample = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        if (sample.length > 60) sample = `${sample.slice(0, 57)}…`;
+        seen.set(name, sample);
+      }
+    }
+    return [...seen].map(([name, sample]) => ({ name, sample })).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   function forget() {
     sessions.clear();
   }
 
-  return { test, search, update, forget };
+  return { test, search, update, fetchImage, forget };
 }
 
 module.exports = { createElvisClient, resolveBase };

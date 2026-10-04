@@ -16,13 +16,27 @@ import http from 'node:http';
 export const USER = 'photodesk';
 export const PASSWORD = 'correct horse';
 
-const ASSETS = [
-  { id: 'A1', metadata: { name: 'IMG_4821.CR3', cf_usagePlacement: 'mag', cf_spreadNum: '12', cf_retouched: 'true' } },
-  { id: 'A2', metadata: { name: 'IMG_4822.CR3', cf_usagePlacement: 'both', cf_qcOk: true } },
-];
+/** A 1×1 JPEG, so previews are real image bytes. */
+const PIXEL_JPEG = Buffer.from(
+  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=',
+  'base64',
+);
 
-export function startMockElvis({ dialect = 'token' } = {}) {
-  const state = { logins: 0, updates: [], log: [], expireNext: false };
+/** Fresh assets per server — writes land on these, so later searches see them. */
+function seedAssets(count) {
+  const assets = [
+    { id: 'A1', metadata: { filename: 'IMG_4821.CR3', name: 'IMG_4821.CR3', folderPath: '/Shoots/Gala', cf_usagePlacement: 'mag', cf_spreadNum: '12' } },
+    { id: 'A2', metadata: { filename: 'IMG_4822.CR3', name: 'IMG_4822.CR3', folderPath: '/Shoots/Gala', cf_usagePlacement: 'both' } },
+  ];
+  for (let i = 3; i <= count; i++) {
+    assets.push({ id: `A${i}`, metadata: { filename: `IMG_${4820 + i}.CR3`, name: `IMG_${4820 + i}.CR3`, folderPath: '/Shoots/Gala' } });
+  }
+  return assets;
+}
+
+export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 200 } = {}) {
+  const ASSETS = seedAssets(assetCount);
+  const state = { logins: 0, updates: [], log: [], expireNext: false, assets: ASSETS, imageFetches: 0 };
   const TOKEN = 'tok-abc123';
   const CSRF = 'csrf-xyz789';
   const SESSION = 'JSESSIONID=sess-42';
@@ -67,8 +81,21 @@ export function startMockElvis({ dialect = 'token' } = {}) {
       if (!authorised(req)) return send(res, 401, { errorcode: 401, message: 'Not logged in' });
 
       if (endpoint === 'search') {
-        const num = Number(params.get('num') || 50);
-        return send(res, 200, { totalHits: ASSETS.length, hits: ASSETS.slice(0, num) });
+        const num = Math.min(Number(params.get('num') || 50), pageCap);
+        const start = Number(params.get('start') || 0);
+        const hits = ASSETS.slice(start, start + num).map((a) => ({
+          ...a,
+          thumbnailUrl: `/services/preview/${a.id}?size=thumb`,
+          previewUrl: `/services/preview/${a.id}`,
+          metadata: { ...a.metadata },
+        }));
+        return send(res, 200, { totalHits: ASSETS.length, firstResult: start, hits });
+      }
+
+      if (endpoint.startsWith('preview/')) {
+        state.imageFetches++;
+        res.writeHead(200, { 'Content-Type': 'image/jpeg' });
+        return res.end(PIXEL_JPEG);
       }
 
       if (endpoint === 'update' || endpoint === 'updatebulk') {
@@ -85,6 +112,10 @@ export function startMockElvis({ dialect = 'token' } = {}) {
           return send(res, 400, { errorcode: 400, message: 'metadata is not a JSON string' });
         }
         state.updates.push({ endpoint, target, metadata });
+        const id = endpoint === 'update' ? target : target.replace(/^id:/, '');
+        const asset = ASSETS.find((a) => a.id === id);
+        if (!asset) return send(res, 404, { errorcode: 404, message: `No asset ${id}` });
+        Object.assign(asset.metadata, metadata);
         return send(res, 200, endpoint === 'update' ? { id: target, metadata } : { processedCount: 1 });
       }
 

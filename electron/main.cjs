@@ -400,31 +400,9 @@ async function writeElvisConfig(config) {
   await fs.writeFile(ELVIS_CONFIG_FILE(), payload);
 }
 
-// Mirrors src/lib/elvis/types.ts's `defaultElvisConfig` — kept in sync by
-// hand since main.cjs is plain JS and cannot import that TS module directly.
-const DEFAULT_ELVIS_CONFIG = {
-  enabled: false,
-  endpoint: '',
-  searchPath: '/search',
-  updatePath: '/update',
-  searchMethod: 'POST',
-  query: '',
-  authMode: 'login',
-  apiKey: '',
-  username: '',
-  password: '',
-  fieldMap: {
-    usage: 'cf_usagePlacement',
-    shotType: 'cf_shotType',
-    spread: 'cf_spreadNum',
-    slide: 'cf_slideNum',
-    retouched: 'cf_retouched',
-    qc: 'cf_qcOk',
-    assembled: 'cf_assembled',
-    submitted: 'cf_submitted',
-    approved: 'cf_approved',
-  },
-};
+// The renderer normalises whatever is stored (src/lib/elvis/types.ts,
+// `normalizeElvisConfig`), so an empty object is a valid "not set up yet".
+const DEFAULT_ELVIS_CONFIG = {};
 
 ipcMain.handle('elvis:getConfig', async () => {
   return (await readElvisConfig()) ?? DEFAULT_ELVIS_CONFIG;
@@ -447,6 +425,7 @@ const elvis = createElvisClient(electronTransport);
 ipcMain.handle('elvis:test', async (_event, config) => elvis.test(config));
 ipcMain.handle('elvis:search', async (_event, config) => elvis.search(config));
 ipcMain.handle('elvis:update', async (_event, config, assetId, metadata) => elvis.update(config, assetId, metadata));
+ipcMain.handle('elvis:fetchImage', async (_event, config, url) => elvis.fetchImage(config, url));
 
 /* ------------------------------------------------------------------ *
  * Lifecycle

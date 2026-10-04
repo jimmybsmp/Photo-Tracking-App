@@ -1,105 +1,108 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { matchesFilters } from '@/state/selectors';
+import { FilterBar } from '@/components/shell/FilterBar';
 import { PhotoTile } from './PhotoTile';
+import { BatchBar } from './BatchBar';
 import { useFileImport } from './useFileImport';
 
 /**
- * The contact sheet: a light-table grid of every shot. Dropping photos
- * anywhere on it imports them and creates rows — the single biggest fix over
- * the tool this replaces, whose window-level drop handler only called
- * `preventDefault()` inside its one `.json` branch, so dropping an actual
- * photo anywhere but a specific 140×90 cell handed it to the browser's
- * default handling: navigate the tab to the image file, discarding
- * everything unsaved. Every handler here calls `preventDefault`
- * unconditionally, and the empty-state and background both accept drops.
+ * The Shots view: every shot as a tile, each showing where its magazine and
+ * press-release tracks stand. Drop photos anywhere to add shots — every drop
+ * handler calls preventDefault, so a photo dropped in the wrong place can
+ * never make the window navigate away and lose the session.
  */
 export function ContactSheet() {
   const rowIds = useTrackerStore(useShallow((s) => s.doc.rowIds));
+  const rows = useTrackerStore((s) => s.doc.rows);
   const filters = useTrackerStore(useShallow((s) => s.filters));
-  const rowsVersion = useTrackerStore((s) => s.revision);
+  const zoom = useTrackerStore((s) => s.gridZoom);
+  const setGridZoom = useTrackerStore((s) => s.setGridZoom);
   const clearSelection = useTrackerStore((s) => s.clearSelection);
-  const { importFiles, progress, lastSkipped } = useFileImport();
+  const { importFiles, importInto, progress } = useFileImport();
   const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const visibleIds = useMemo(() => {
-    const doc = useTrackerStore.getState().doc;
-    return rowIds.filter((id) => {
-      const row = doc.rows[id];
-      return row ? matchesFilters(row, filters) : false;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    });
-    // rowsVersion forces recompute on any field edit (usage/shotType/search
-    // fields can change without rowIds itself changing).
-  }, [rowIds, filters, rowsVersion]);
+  const visible = useMemo(() => rowIds.filter((id) => rows[id] && matchesFilters(rows[id], filters)), [rowIds, rows, filters]);
 
   return (
-    <div
-      className="sheet-scroll"
-      onDragOver={(e) => {
-        e.preventDefault();
-        if (e.dataTransfer.types.includes('Files')) setDragOver(true);
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragOver(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragOver(false);
-        if (e.dataTransfer.files.length > 0) void importFiles(e.dataTransfer.files);
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) clearSelection();
-      }}
-    >
-      {visibleIds.length === 0 ? (
-        <EmptyState onImport={importFiles} filtered={rowIds.length > 0} />
-      ) : (
-        <div className={`grid-wrap ${dragOver ? 'grid-wrap-drag-over' : ''}`}>
-          {visibleIds.map((id) => (
-            <PhotoTile key={id} rowId={id} />
-          ))}
-        </div>
-      )}
+    <div className="view-col">
+      <FilterBar shown={visible.length} total={rowIds.length}>
+        <input
+          type="range"
+          className="zoom"
+          min={0.6}
+          max={1.8}
+          step={0.1}
+          value={zoom}
+          onChange={(e) => setGridZoom(Number(e.target.value))}
+          title="Tile size"
+        />
+        <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>
+          Add photos…
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files) void importFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+      </FilterBar>
+      <BatchBar />
 
-      {dragOver && <div className="drop-veil">Drop photos to add shots</div>}
+      <div
+        className={`grid-scroll ${dragOver ? 'grid-scroll-drop' : ''}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (e.dataTransfer.types.includes('Files')) setDragOver(true);
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) setDragOver(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (e.dataTransfer.files.length > 0) void importFiles(e.dataTransfer.files);
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) clearSelection();
+        }}
+      >
+        {rowIds.length === 0 ? (
+          <div className="empty-state">
+            <h2>Drop photos here</h2>
+            <p className="muted">A whole folder at once is fine. Each photo becomes a shot, numbered from its filename.</p>
+            <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>
+              Choose photos…
+            </button>
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="empty-state">
+            <p className="muted">No shots match these filters.</p>
+          </div>
+        ) : (
+          <div className="grid" onClick={(e) => e.target === e.currentTarget && clearSelection()}>
+            {visible.map((id) => (
+              <PhotoTile key={id} rowId={id} onDropFiles={(rowId, files) => void importInto(rowId, files[0])} />
+            ))}
+          </div>
+        )}
+        {dragOver && <div className="drop-veil">Drop photos to add shots</div>}
+      </div>
+
       {progress && (
-        <div className="import-toast">
-          Importing {progress.done}/{progress.total}…
+        <div className="import-progress">
+          Importing {progress.done} of {progress.total}…
+          <span className="bar">
+            <span className="bar-fill" style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }} />
+          </span>
         </div>
-      )}
-      {!progress && lastSkipped > 0 && (
-        <div className="import-toast import-toast-fade">
-          {lastSkipped} already tracked, skipped
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EmptyState({ onImport, filtered }: { onImport: (files: FileList) => void; filtered: boolean }) {
-  return (
-    <div className="empty-state">
-      {filtered ? (
-        <p>No shots match the current filters.</p>
-      ) : (
-        <>
-          <p>Drop photos anywhere on this page to start tracking them.</p>
-          <label className="btn btn-primary">
-            Choose photos…
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files) onImport(e.target.files);
-                e.target.value = '';
-              }}
-            />
-          </label>
-        </>
       )}
     </div>
   );

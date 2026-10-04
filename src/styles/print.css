@@ -1,9 +1,8 @@
 /*
- * Print output. Only the sheet view is meant to be printed — the toolbar
- * switches to it before calling print() — so this hides everything outside
- * `.sheet-page` and lets the table's own page-break rules do the rest.
- * Tabloid landscape matches the original tool's layout, which crews already
- * print and hand out.
+ * Print output. Only the Sheet is printed — the Print command switches to it
+ * first — so everything outside `.sheet-page` (top bar, filters, inspector,
+ * toasts) carries `.no-print` and drops out. Tabloid landscape matches the
+ * original tool's layout, which crews already print and hand out.
  */
 
 @page {
@@ -12,44 +11,51 @@
 }
 
 @media print {
-  body {
-    background: none;
+  html,
+  body,
+  #root {
+    height: auto;
+    background: #fff;
   }
   .no-print {
     display: none !important;
   }
-  .app-shell {
+  .app,
+  .app-main,
+  .app-view,
+  .view-col {
     display: block;
     height: auto;
+    overflow: visible;
   }
   .sheet-scroll {
     overflow: visible;
-    background: none;
   }
   .sheet-page {
     margin: 0;
     padding: 0;
-    max-width: none;
-    border: none !important;
-    box-shadow: none;
+    width: auto;
+    min-width: 0;
+    border-radius: 0;
   }
-  .sheet-table th {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .sheet-row-mag td,
-  .sheet-row-pr td,
-  .sheet-row-both td {
+  .sheet-table th,
+  .stage-cell-done,
+  .track-label {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
   .sheet-row {
     page-break-inside: avoid;
   }
-  input,
-  select {
+  .sheet-row-selected td {
+    background: none;
+  }
+  .cell,
+  .sheet-header-fields input {
     border: none !important;
     background: transparent !important;
     color: #000 !important;
+    appearance: none;
+    -webkit-appearance: none;
   }
 }

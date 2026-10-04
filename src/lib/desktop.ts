@@ -15,7 +15,7 @@
  * base64 round trip.
  */
 
-import type { ElvisConfig, ElvisHit, ElvisRequestResult, ElvisTestResult } from './elvis/types';
+import type { ElvisConfig, ElvisImageResult, ElvisRequestResult, ElvisSearchResult, ElvisTestResult } from './elvis/types';
 
 export interface SaveResult {
   ok: boolean;
@@ -68,11 +68,15 @@ export interface DesktopBridge {
    * Electron's `safeStorage`. It is never written into the project file, a
    * delta, or anything that leaves this machine.
    */
-  elvisGetConfig(): Promise<ElvisConfig>;
+  /** The stored config, in whatever shape it was saved — normalise before use. */
+  elvisGetConfig(): Promise<unknown>;
   elvisSetConfig(config: ElvisConfig): Promise<{ ok: boolean }>;
   /** Address → log in → one-hit search, reporting each step. */
   elvisTest(config: ElvisConfig): Promise<ElvisTestResult>;
-  elvisSearch(config: ElvisConfig): Promise<ElvisRequestResult & { hits?: ElvisHit[]; totalHits?: number }>;
+  /** Every matching asset, paged. */
+  elvisSearch(config: ElvisConfig): Promise<ElvisSearchResult>;
+  /** A preview/thumbnail from the configured server only. */
+  elvisFetchImage(config: ElvisConfig, url: string): Promise<ElvisImageResult>;
   elvisUpdate(config: ElvisConfig, assetId: string, metadata: Record<string, unknown>): Promise<ElvisRequestResult>;
 }
 

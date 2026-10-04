@@ -98,6 +98,30 @@ export async function importImageFile(file: File): Promise<AssetMeta> {
 }
 
 /**
+ * The same import from raw bytes already in memory — a preview downloaded
+ * from Elvis. Hashing the bytes means every site that pulls the same asset
+ * ends up with the same asset key.
+ */
+export async function importImageBytes(bytes: Uint8Array, mime: string, fileName: string): Promise<AssetMeta> {
+  const buffer = bytes.slice().buffer as ArrayBuffer;
+  const hash = await hashBytes(buffer);
+  const original = await readAsDataUrl(new Blob([buffer], { type: mime }));
+  const image = await loadImageEl(original);
+  const keepAlpha = mime === 'image/png' || mime === 'image/webp';
+  const reviewUrl = resize(image, REVIEW_EDGE, REVIEW_QUALITY, keepAlpha);
+  const thumbUrl = resize(image, THUMB_EDGE, THUMB_QUALITY, keepAlpha);
+  return {
+    hash,
+    thumbUrl,
+    reviewUrl,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    fileName,
+    bytes: dataUrlBytes(thumbUrl) + dataUrlBytes(reviewUrl),
+  };
+}
+
+/**
  * The same import, starting from a data URL already in memory — used by the
  * legacy-file migration, which has the old tool's raw embedded image but no
  * `File` object to read it from.
@@ -128,7 +152,11 @@ export async function importImageDataUrl(dataUrl: string, fileName: string): Pro
   };
 }
 
-/** Extract a likely shot/camera-file number from a filename, e.g. IMG_4821 → 4821. */
+/**
+ * Extract a likely shot/camera-file number from a filename — the original
+ * tool's rule, kept as-is: IMG_4821.CR3 → IMG_4821, DSC_0042 → DSC_0042,
+ * 02C1234 → 02C1234, anything ending in four digits → those digits.
+ */
 export function extractShotNumber(fileName: string): string {
   const stem = fileName.replace(/\.[^/.]+$/, '');
   const cameraPattern = /([0-9]{2}[A-Z][0-9]{4}|[A-Z0-9]+_[0-9]{4}|img_?[0-9]{4}|[0-9]{4})$/i;

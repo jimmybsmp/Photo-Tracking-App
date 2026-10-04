@@ -1,69 +1,94 @@
 import { useState } from 'react';
-import { useTrackerStore } from '@/state/useTrackerStore';
+import { useTrackerStore, type SideTarget } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
-import { PIPELINE_STAGES } from '@/state/schema';
+import { PIPELINE_STAGES, STAGE_LABELS, type PipelineStage } from '@/state/schema';
 
-const STAGE_LABELS: Record<string, string> = {
-  retouched: 'Retouched',
-  qc: 'QC',
-  assembled: 'Assembled',
-  submitted: 'Submitted',
-  approved: 'Approved',
-};
-
-/** Multi-row actions, shown whenever more than the active row is selected. */
+/**
+ * Changes to many shots at once. Always aimed at one property (or both, on
+ * purpose): magazine and press release are separate tracks, so "mark these
+ * retouched" has to say which.
+ */
 export function BatchBar() {
-  const selectedRowIds = useTrackerStore(useShallow((s) => s.selectedRowIds));
-  const batchSetPipeline = useTrackerStore((s) => s.batchSetPipeline);
+  const selected = useTrackerStore(useShallow((s) => s.selectedRowIds));
+  const batchSetStage = useTrackerStore((s) => s.batchSetStage);
   const batchSetRetoucher = useTrackerStore((s) => s.batchSetRetoucher);
+  const batchSetField = useTrackerStore((s) => s.batchSetField);
   const deleteRows = useTrackerStore((s) => s.deleteRows);
   const clearSelection = useTrackerStore((s) => s.clearSelection);
+  const [side, setSide] = useState<SideTarget>('mag');
+  const [stage, setStage] = useState<PipelineStage>('retouched');
   const [retoucher, setRetoucher] = useState('');
 
-  if (selectedRowIds.length === 0) return null;
+  if (selected.length === 0) return null;
 
   return (
-    <div className="batch-bar">
-      <span className="batch-count">{selectedRowIds.length} selected</span>
+    <div className="batchbar no-print">
+      <span className="batch-count">{selected.length} selected</span>
 
-      <div className="batch-actions">
-        {PIPELINE_STAGES.map((stage) => (
-          <button key={stage} className="chip" onClick={() => batchSetPipeline(selectedRowIds, stage, true)}>
-            {STAGE_LABELS[stage]}: YES
+      <div className="segmented">
+        {(['mag', 'pr', 'both'] as SideTarget[]).map((s) => (
+          <button key={s} className={side === s ? 'seg-active' : ''} onClick={() => setSide(s)}>
+            {s === 'mag' ? 'Magazine' : s === 'pr' ? 'Press release' : 'Both'}
           </button>
         ))}
-
-        <input
-          className="field field-sm"
-          placeholder="Retoucher initials…"
-          value={retoucher}
-          onChange={(e) => setRetoucher(e.target.value)}
-        />
-        <button
-          className="btn"
-          onClick={() => {
-            if (!retoucher.trim()) return;
-            batchSetRetoucher(selectedRowIds, retoucher.trim());
-            setRetoucher('');
-          }}
-        >
-          Assign retoucher
-        </button>
-
-        <button
-          className="btn btn-danger"
-          onClick={() => {
-            if (confirm(`Delete ${selectedRowIds.length} selected shot(s)? Undo with Cmd+Z.`)) {
-              deleteRows(selectedRowIds);
-            }
-          }}
-        >
-          Delete selected
-        </button>
-        <button className="btn" onClick={clearSelection}>
-          Clear
-        </button>
       </div>
+
+      <select className="field field-select" value={stage} onChange={(e) => setStage(e.target.value as PipelineStage)}>
+        {PIPELINE_STAGES.map((s) => (
+          <option key={s} value={s}>
+            {STAGE_LABELS[s]}
+          </option>
+        ))}
+      </select>
+      <button className="btn" onClick={() => batchSetStage(selected, side, stage, true)}>
+        Mark done
+      </button>
+      <button className="btn btn-ghost" onClick={() => batchSetStage(selected, side, stage, false)}>
+        Mark not done
+      </button>
+
+      <span className="batch-sep" />
+      <input
+        className="field field-sm"
+        placeholder="Retoucher"
+        value={retoucher}
+        onChange={(e) => setRetoucher(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && retoucher.trim()) batchSetRetoucher(selected, side, retoucher.trim());
+        }}
+      />
+      <button className="btn" disabled={!retoucher.trim()} onClick={() => batchSetRetoucher(selected, side, retoucher.trim())}>
+        Assign
+      </button>
+
+      <span className="batch-sep" />
+      <select
+        className="field field-select"
+        value=""
+        onChange={(e) => {
+          const usage = e.target.value;
+          if (usage) batchSetField(selected, 'usage', usage);
+        }}
+      >
+        <option value="">Set usage…</option>
+        <option value="mag">Magazine</option>
+        <option value="pr">Press release</option>
+        <option value="both">Both</option>
+        <option value="none">None</option>
+      </select>
+
+      <span className="spacer" />
+      <button
+        className="btn btn-danger"
+        onClick={() => {
+          if (confirm(`Delete ${selected.length} shot(s)? Undo with ⌘Z.`)) deleteRows(selected);
+        }}
+      >
+        Delete
+      </button>
+      <button className="btn btn-ghost" onClick={clearSelection}>
+        Done
+      </button>
     </div>
   );
 }

@@ -2,32 +2,34 @@ import { getDeviceId } from './deviceId';
 import {
   ROW_FIELD_PATHS,
   getRowField,
+  isNewerStamp,
+  mergeComment,
+  normalizeRow,
   setRowField,
   type AssetMeta,
   type FieldStamp,
   type Header,
-  type RowFieldPath,
+  type ShotComment,
   type ShotRow,
   type TrackerDocument,
 } from '@/state/schema';
 
 /**
- * Delta export/import — how two units on the same shoot share tracking data
- * with no server between them.
+ * Delta export/import — and the merge rule every sync path shares.
  *
- * Every row field carries its own `{t, d}` edit stamp (see schema.ts). A
- * delta is just "every field stamped after some cutoff, plus the assets they
- * point at, plus any rows deleted after that cutoff" — small, because most
- * of a shoot's fields stop moving once they're set. Merging is a per-field
- * newest-wins comparison, so unrelated edits to the same row from two units
- * (one retouches, the other does layout) combine cleanly instead of one
- * side's whole row clobbering the other's.
+ * Every row field carries its own `{t, d, u}` stamp (see schema.ts). Merging
+ * compares stamps field by field and keeps the newer, so unrelated edits to
+ * one shot from two places (one site retouches, another sets the spread)
+ * combine instead of one whole row overwriting the other. Comments merge by
+ * union — text is never edited after posting — and a comment's resolved/open
+ * state follows its own newest stamp.
  *
- * What this deliberately does not do: merge below the field level (two units
- * editing the exact same field on the exact same row at the same time still
- * resolves last-write-wins, tie-broken by device id) and does not sync the
- * show header per-field — the header is one small block, tracked with one
- * timestamp for all of it.
+ * `mergeRow` is used by delta import and by Elvis pull alike: a pull is just
+ * a delta whose other side is the shared Elvis record.
+ *
+ * Deliberate limits: two people changing the *same* field on the same shot at
+ * the same moment still resolves to one winner (newest, tie-broken by
+ * device), and the show header merges as one block.
  */
 
 export const DELTA_KIND = 'phototrack-delta';
@@ -46,23 +48,31 @@ export interface DeltaFile {
 }
 
 export function isDeltaFile(raw: unknown): raw is DeltaFile {
-  return (
-    typeof raw === 'object' &&
-    raw !== null &&
-    (raw as Record<string, unknown>).kind === DELTA_KIND
-  );
+  return typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>).kind === DELTA_KIND;
 }
 
-/** Everything changed since `since` (epoch ms) — pass 0 for "the whole project". */
+/** The newest moment anything on this row changed — fields or comments. */
+export function rowChangedAt(row: ShotRow): number {
+  let t = 0;
+  for (const key in row.fieldTimes) t = Math.max(t, row.fieldTimes[key].t);
+  for (const c of Object.values(row.comments)) t = Math.max(t, c.at, c.resolvedAt);
+  return t;
+}
+
+function newestStamp(fieldTimes: Record<string, FieldStamp>): FieldStamp | null {
+  let best: FieldStamp | null = null;
+  for (const key in fieldTimes) if (isNewerStamp(fieldTimes[key], best)) best = fieldTimes[key];
+  return best;
+}
+
+/** Everything changed since `since` (epoch ms) — pass 0 for the whole project. */
 export function buildDelta(doc: TrackerDocument, since: number): DeltaFile {
   const rows: Record<string, ShotRow> = {};
   const assetHashes = new Set<string>();
 
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
-    if (!row) continue;
-    const touchedSince = Object.values(row.fieldTimes).some((stamp) => stamp.t > since);
-    if (!touchedSince) continue;
+    if (!row || rowChangedAt(row) <= since) continue;
     rows[id] = row;
     if (row.imageHash) assetHashes.add(row.imageHash);
   }
@@ -73,9 +83,7 @@ export function buildDelta(doc: TrackerDocument, since: number): DeltaFile {
   }
 
   const assets: Record<string, AssetMeta> = {};
-  for (const hash of assetHashes) {
-    if (doc.assets[hash]) assets[hash] = doc.assets[hash];
-  }
+  for (const hash of assetHashes) if (doc.assets[hash]) assets[hash] = doc.assets[hash];
 
   return {
     kind: DELTA_KIND,
@@ -91,81 +99,105 @@ export function buildDelta(doc: TrackerDocument, since: number): DeltaFile {
   };
 }
 
+export interface RowMergeResult {
+  row: ShotRow;
+  fieldsChanged: number;
+  commentsChanged: number;
+}
+
+/**
+ * Merge another copy of a shot into ours. Returns the same `local` object
+ * when nothing changed, so callers can skip a store update entirely. The
+ * row's own id is kept — the incoming copy may know it under another id.
+ */
+export function mergeRow(local: ShotRow, incoming: ShotRow): RowMergeResult {
+  let row = local;
+  let fieldsChanged = 0;
+  for (const path of ROW_FIELD_PATHS) {
+    const stamp = incoming.fieldTimes[path];
+    if (!stamp || !isNewerStamp(stamp, local.fieldTimes[path])) continue;
+    row = setRowField(row, path, getRowField(incoming, path));
+    row = { ...row, fieldTimes: { ...row.fieldTimes, [path]: stamp } };
+    fieldsChanged++;
+  }
+
+  let comments: Record<string, ShotComment> | null = null;
+  let commentsChanged = 0;
+  for (const [id, theirs] of Object.entries(incoming.comments)) {
+    const ours = local.comments[id];
+    const merged = ours ? mergeComment(ours, theirs) : theirs;
+    if (merged === ours) continue;
+    comments = comments ?? { ...local.comments };
+    comments[id] = merged;
+    commentsChanged++;
+  }
+  if (comments) row = { ...row, comments };
+
+  return { row, fieldsChanged, commentsChanged };
+}
+
 export interface MergeSummary {
   rowsAdded: number;
   rowsUpdated: number;
   rowsDeleted: number;
   fieldsChanged: number;
+  commentsChanged: number;
   headerChanged: boolean;
 }
 
-function isNewer(a: FieldStamp, b: FieldStamp | null | undefined): boolean {
-  if (!b) return true;
-  if (a.t !== b.t) return a.t > b.t;
-  return a.d > b.d;
-}
+export const emptySummary = (): MergeSummary => ({
+  rowsAdded: 0,
+  rowsUpdated: 0,
+  rowsDeleted: 0,
+  fieldsChanged: 0,
+  commentsChanged: 0,
+  headerChanged: false,
+});
 
-function newestStamp(fieldTimes: Record<string, FieldStamp>): FieldStamp | null {
-  let best: FieldStamp | null = null;
-  for (const key in fieldTimes) {
-    if (isNewer(fieldTimes[key], best)) best = fieldTimes[key];
-  }
-  return best;
-}
+export const summaryChanged = (s: MergeSummary) =>
+  s.rowsAdded + s.rowsUpdated + s.rowsDeleted > 0 || s.headerChanged;
 
 /** Merge a delta into a local document. Never mutates either input. */
-export function mergeDelta(
-  local: TrackerDocument,
-  delta: DeltaFile,
-): { doc: TrackerDocument; summary: MergeSummary } {
+export function mergeDelta(local: TrackerDocument, delta: DeltaFile): { doc: TrackerDocument; summary: MergeSummary } {
   const rows: Record<string, ShotRow> = { ...local.rows };
   let rowIds = [...local.rowIds];
   const assets: Record<string, AssetMeta> = { ...local.assets };
   const deletedRowIds: Record<string, FieldStamp> = { ...local.deletedRowIds };
+  const summary = emptySummary();
 
-  const summary: MergeSummary = {
-    rowsAdded: 0,
-    rowsUpdated: 0,
-    rowsDeleted: 0,
-    fieldsChanged: 0,
-    headerChanged: false,
-  };
+  for (const hash in delta.assets) if (!assets[hash]) assets[hash] = delta.assets[hash];
 
-  for (const hash in delta.assets) {
-    if (!assets[hash]) assets[hash] = delta.assets[hash];
+  // The same Elvis asset can sit under different row ids at two sites (one
+  // pulled it before row ids were derived from asset ids, or linked a
+  // dropped photo by hand) — match those up instead of duplicating the shot.
+  const byAsset = new Map<string, string>();
+  for (const id of rowIds) {
+    const a = rows[id]?.elvisAssetId;
+    if (a) byAsset.set(a, id);
   }
 
-  for (const id in delta.rows) {
-    const incoming = delta.rows[id];
-    const existing = rows[id];
+  for (const [incomingId, raw] of Object.entries(delta.rows)) {
+    const incoming = normalizeRow(raw, incomingId);
+    const localId = rows[incomingId] ? incomingId : (incoming.elvisAssetId && byAsset.get(incoming.elvisAssetId)) || null;
 
-    if (!existing) {
-      // New to us — unless we deleted this row after the peer's newest edit
-      // to it, in which case the delete stands rather than resurrecting it.
-      const tombstone = deletedRowIds[id];
-      const incomingNewest = newestStamp(incoming.fieldTimes);
-      if (tombstone && incomingNewest && tombstone.t >= incomingNewest.t) continue;
-      rows[id] = incoming;
-      rowIds.push(id);
+    if (!localId) {
+      // New to us — unless we deleted it after the other side's last edit.
+      const tombstone = deletedRowIds[incomingId];
+      const newest = newestStamp(incoming.fieldTimes);
+      if (tombstone && newest && tombstone.t >= newest.t) continue;
+      rows[incomingId] = incoming;
+      rowIds.push(incomingId);
+      if (incoming.elvisAssetId) byAsset.set(incoming.elvisAssetId, incomingId);
       summary.rowsAdded++;
       continue;
     }
 
-    let merged = existing;
-    let changedFields = 0;
-    for (const path of ROW_FIELD_PATHS as readonly RowFieldPath[]) {
-      const incomingStamp = incoming.fieldTimes[path];
-      if (!incomingStamp) continue;
-      if (isNewer(incomingStamp, existing.fieldTimes[path])) {
-        merged = setRowField(merged, path, getRowField(incoming, path));
-        merged = { ...merged, fieldTimes: { ...merged.fieldTimes, [path]: incomingStamp } };
-        changedFields++;
-      }
-    }
-    if (changedFields > 0) {
-      rows[id] = merged;
+    const result = mergeRow(rows[localId], incoming);
+    if (result.row !== rows[localId]) {
+      rows[localId] = result.row;
       summary.rowsUpdated++;
-      summary.fieldsChanged += changedFields;
+      summary.fieldsChanged += result.fieldsChanged;
+      summary.commentsChanged += result.commentsChanged;
     }
   }
 
@@ -175,11 +207,11 @@ export function mergeDelta(
     if (existingTombstone && existingTombstone.t >= incomingTombstone.t) continue;
 
     const survivor = rows[id];
-    const survivorNewest = survivor ? newestStamp(survivor.fieldTimes) : null;
-    const editedAfterDelete = Boolean(survivor && survivorNewest && survivorNewest.t > incomingTombstone.t);
-
+    const survivorNewest = survivor ? rowChangedAt(survivor) : 0;
     deletedRowIds[id] = incomingTombstone;
-    if (survivor && !editedAfterDelete) {
+    // Edited here after they deleted it: keep it — an edit is stronger
+    // evidence of intent than a delete made elsewhere without seeing it.
+    if (survivor && survivorNewest <= incomingTombstone.t) {
       delete rows[id];
       rowIds = rowIds.filter((rid) => rid !== id);
       summary.rowsDeleted++;
@@ -188,14 +220,11 @@ export function mergeDelta(
 
   let header = local.header;
   let headerTime = local.headerTime;
-  if (delta.headerTime && isNewer(delta.headerTime, local.headerTime)) {
+  if (delta.headerTime && isNewerStamp(delta.headerTime, local.headerTime)) {
     header = delta.header;
     headerTime = delta.headerTime;
     summary.headerChanged = true;
   }
 
-  return {
-    doc: { ...local, header, headerTime, rows, rowIds, assets, deletedRowIds },
-    summary,
-  };
+  return { doc: { ...local, header, headerTime, rows, rowIds, assets, deletedRowIds }, summary };
 }

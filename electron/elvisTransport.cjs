@@ -57,7 +57,11 @@ function electronTransport({ url, method, headers, body }) {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('end', () =>
-        finish(resolve, { status: response.statusCode, bodyText: Buffer.concat(chunks).toString('utf8') }),
+        finish(resolve, {
+          status: response.statusCode,
+          contentType: [].concat(response.headers['content-type'] || [])[0] || '',
+          body: Buffer.concat(chunks),
+        }),
       );
       response.on('error', (error) => finish(reject, error));
     });

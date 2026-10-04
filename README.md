@@ -1,33 +1,46 @@
 # PhotoTrack
 
-A photo production tracker for a shoot's line: every frame, where it's
-running (magazine, press release, or both), who's retouching it, and where it
-stands in the pipeline — retouched → QC → assembled → submitted → approved.
-The deliverable is the same one a production desk already runs off: a printed
-tracker sheet, plus a shared, current picture of the whole shoot's status.
+A photo production tracker for a shoot: every frame, where it runs —
+magazine, press release, or both — who is retouching it, and where it stands
+on each property's track: retouched → QC → assembled → submitted → approved.
+Built so that an executive and every member of staff, at any site, see the
+same current picture, and so that an executive's concerns reach the people
+doing the work and get answered.
 
-Built to replace a single self-contained HTML tool that worked until a real
-shoot's worth of photos went into it — it saved everything to `localStorage`
-as inline base64, which has about a 5MB budget total. One or two full-size
-photos and every save afterward failed silently. See "What changed" below.
+Magazine and press release are tracked separately, every stage included: a
+magazine image is printed far larger than anything online and usually gets its
+own CMYK colour work and detail retouching.
+
+## Who sees what
+
+- **Overview** (opens first) — the executive view. Progress per property with
+  each stage's count, what's waiting where, open concerns, shots that need
+  someone (stalled after retouch, no retoucher, no usage), every shot running
+  in both properties side by side, retouching workload, and recent activity
+  with who did it. Every number opens exactly those shots.
+- **Shots** — every shot as a tile showing both tracks. Click one to open it:
+  usage, shot type, spread/slide, retoucher and the stage checklist for each
+  property, with who checked each stage and when, plus its notes & concerns.
+- **Sheet** — the tabloid tracker sheet for print or PDF, editable like a
+  spreadsheet.
+
+Everyone enters their name once (and whether they're an executive). It goes
+on every stage they mark and every comment they post. An executive's comments
+default to **concerns**, which stay open — on the tile, on the overview — until
+someone on the team replies and resolves them.
 
 ## The workflow
 
-1. **Drop photos onto the grid.** Anywhere on the contact-sheet view — a
-   whole folder at once — creates one row per photo, guesses its shot number
-   from the filename, and keeps going even with hundreds of images queued.
-2. **Set usage and shot type** on each shot: Magazine, Press Release, or
-   Both; Longshot or Close-up. A longshot skips assembly, submission, and
-   approval — those three stages only apply to a select that runs in a
-   layout.
-3. **Track it through the pipeline** — click a tile to open its detail panel,
-   or work down the printable sheet — retoucher assignment and the five
-   pipeline toggles, independently for the magazine and press sides when a
-   shot runs in both.
-4. **Print or export** the tabloid sheet, or export a PDF from the desktop
-   app.
-5. **Hand off progress to another unit** with a delta file (see below) or,
-   once it's configured, sync through WoodWing Elvis.
+1. **Bring in the shoot** — pull it from WoodWing Elvis (photos, filenames and
+   folders come with it), or drop photos anywhere on the Shots tab.
+2. **Set where each shot runs** — Magazine, Press release, or Both — and its
+   shot type. A longshot skips assembly, submission and approval; those three
+   stages are hidden for it and left out of every count.
+3. **Work the tracks** — check stages off in the shot's panel or on the sheet;
+   assign retoucher per property.
+4. **Discuss on the shot** — concerns and notes, replies, resolve.
+5. **Stay in step** — Elvis sync keeps every site current automatically; delta
+   files do the same by hand where there's no network.
 
 ## The two builds
 
@@ -85,85 +98,86 @@ extra, because every image is addressed by a content hash rather than copied
 per row. Dropping the same file on the grid twice doesn't create a second
 row for it; it's already tracked.
 
-## Sharing progress between two units — delta files
+## How two sites stay in step
 
-`.ptdelta` files are how two units on the same shoot, each running PhotoTrack
-independently, share progress without a server: **Export Delta** packages
-everything changed since the last export (or the whole project the first
-time); **Import Delta** merges it in field by field. Every field on every row
-carries its own edit timestamp, so if one unit retouches a shot while the
-other assigns its layout position, both edits land — neither side's row
-clobbers the other's. Hand the file over on a USB stick, over email, however
-is easiest; there's no server to run.
+Every field on every shot carries an edit stamp — when, on which machine, by
+whom. Merging another site's copy compares those stamps field by field and
+keeps the newer, so one site retouching a shot while another sets its spread
+number both land; neither overwrites the other. Comments merge by union, and a
+concern's open/resolved state follows its own newest change. The same merge
+runs whether the other copy arrives from Elvis or from a delta file.
+
+**Delta files** (`.ptdelta`, File → Export / Import changes) carry everything
+changed since the last export, for machines with no network between them —
+hand them over on a USB stick or by email.
 
 What this doesn't do: merge two *simultaneous* edits to the exact same field
-(newest wins, tie-broken by which machine made the edit), and it doesn't sync
-the show header field-by-field (the header is one small block with one
-timestamp for all of it — whichever export touched it last wins as a whole).
+(newest wins, tie-broken by machine), and the shoot's header merges as one
+block.
 
 ## WoodWing Elvis sync
 
-The **Elvis Sync…** panel (desktop app only — see the table above) searches
-Elvis for assets, maps custom metadata onto rows through the same per-field
-merge a delta import uses, and writes pipeline/usage state back.
+Desktop app only (a browser page can't log in to a DAM). Open it from the
+**Connect Elvis** chip in the top bar:
 
-**Setting it up:**
+1. **Connect** — the server address you use in a browser, and the username and
+   password PhotoTrack should sign in with. **Test connection** walks address →
+   log in → search and, if a step fails, says which, the URL tried, and what
+   that error usually means.
+2. **Which assets** — an Elvis query, usually the shoot's folder, e.g.
+   `ancestorPaths:"/Shoots/2026/Gala"`. Every matching asset becomes a shot:
+   its preview, filename (→ shot number) and folder come with it, and new
+   assets appear on each sync.
+3. **Shared PhotoTrack record** — *ask your Elvis administrator to create one
+   multi-line text custom field* (e.g. `cf_photoTrack`) that the sync account
+   can edit. PhotoTrack stores each shot's complete tracking state there —
+   both tracks, who/when for every stage, and the comment thread — which is
+   what lets sites merge each other's work exactly. Without it, only the plain
+   fields below are shared, and comments stay on each computer.
+4. **Plain fields** (optional) — for people looking at assets in Elvis itself:
+   usage, spread/slide, retouchers, and a written status per property
+   ("Waiting on QC"). After **Test connection** these boxes list the fields
+   your assets actually have, with an example value each.
+5. **Sync** — **Pull this shoot** links the open project to the query. From
+   then on it syncs every minute (adjustable) and a few seconds after each
+   change; the top-bar chip always shows when it last synced. If the network
+   drops, nothing is lost — changes stay here and go out on the next sync.
 
-1. **Server endpoint** — the address you open Elvis at in a browser is fine
-   (`https://dam.company.com`); the app adds `/services` itself. A custom
-   context path such as `https://host/elvis/services` is kept as typed.
-2. **Auth: Username & password** — this is how Elvis authenticates. The app
-   logs in at `/services/login` and reuses the session for every later call,
-   handling both Elvis 6 / Assets (auth token) and Elvis 5 (session cookie +
-   CSRF token) automatically. Note that each login takes one of the server's
-   API licences; if a correct password is still refused, ask the Elvis
-   administrator whether any are free.
-3. **Test connection** — runs three steps (address → log in → a one-asset
-   search) and shows exactly which one failed, the URL it tried, and what
-   that error usually means. Nothing in the project is touched.
-4. **Custom field names** — confirm the `cf_…` names for usage placement,
-   shot type, spread/slide, and the five pipeline stages with whoever
-   administers Elvis, and that the account can write them, before using
-   **Push changed rows**.
-
-**Before blaming the app on an air-gapped Mac:** the Elvis server has to be on
-the same isolated network. A WoodWing-hosted (cloud) Elvis is unreachable from
-an air-gapped machine by definition — the test will fail at the login step
-with "can't find a server". Requests go through macOS's own network stack, so
-a company-issued HTTPS certificate works once its root is trusted in Keychain
-Access, and the system proxy settings are honoured.
-
-`npm run test:elvis` exercises the client against a strict mock server in both
-Elvis dialects.
-
-Credentials are stored in a local config file the desktop app owns,
-encrypted at rest with Electron's `safeStorage` (the OS keychain on macOS).
-They are never written into a project file, a recovery file, or a delta.
+Each login takes one of the server's API licences, so the session is reused.
+Credentials are stored only in the desktop app's own encrypted config — never
+in a project file, a delta, or the Elvis record. Requests go through macOS's
+own network stack, so a company HTTPS certificate works once its root is
+trusted in Keychain Access, and the system proxy is honoured.
 
 ## Keyboard shortcuts
 
-`Cmd/Ctrl+Z` / `Shift+Z` undo/redo · `Cmd/Ctrl+S` save (`Shift` for Save As) ·
-`N` add a shot · `1`–`5` toggle Retouched/QC/Assembled/Submitted/Approved on
-whichever shot is open in the inspector, on every side its usage covers.
+`⌘Z` / `⇧⌘Z` undo/redo (a burst of typing undoes as one step) · `⌘S` save,
+`⇧⌘S` save as · `N` new shot · `Esc` close the shot panel · with a shot open,
+`1`–`5` toggle its stages in order — on its magazine track, or its only track;
+`⇧1`–`⇧5` for the press-release track of a shot in both.
 
 ## Before pushing
 
 ```bash
-npm run typecheck && npm run build
+npm run typecheck && npm run build && npm test
 ```
+
+`npm test` runs the logic tests (migration, the longshot rule, undo, comments,
+delta merge, and three sites syncing through a simulated Elvis) and the Elvis
+protocol tests against a strict mock server.
 
 ## Known gaps
 
-- **Lane/board grouping in the grid.** The contact sheet is a flat, filtered
-  grid of tiles today — dragging a shot into a "QC" or "by retoucher" lane to
-  change its state is a natural next step, not yet built.
-- **Elvis sync is unverified against a real server.** See above — it needs
-  someone who administers the DAM to confirm endpoint, auth, and field names.
-- **Delta merge is per-field last-write-wins, not a full CRDT.** Two units
-  editing the exact same field on the exact same row at the same moment still
-  resolves to one winner rather than a genuine three-way merge; that's an
-  accepted simplification, not a bug to fix quietly later without saying so.
-- **Native Apple Silicon, universal, and `.dmg` builds all need a Mac to
-  build on** — `lipo`, `codesign`, and `hdiutil` respectively. See the table
-  under "The two builds". The x64 build covers Apple Silicon via Rosetta 2 in
-  the meantime, and proper signing needs an Apple Developer ID either way.
+- **Not yet run against your Elvis server's record field.** The protocol, the
+  sync and two app instances coordinating were all tested against a mock
+  server; the first real run needs the record field created (see above).
+- **Shots added by dropping photos aren't uploaded to Elvis.** Sync covers
+  shots pulled from Elvis; a dropped photo links to an asset only if its shot
+  number matches that asset's filename.
+- **Comments can't be edited or deleted** once posted — that's what keeps
+  merging threads between sites simple and safe. Resolve instead.
+- **Per-field newest-wins, not a full CRDT.** Two people changing the same
+  field of the same shot at the same moment resolve to one winner.
+- **Native Apple Silicon, universal, and `.dmg` builds need a Mac to build
+  on** — `lipo`, `codesign`, `hdiutil`. The x64 build runs on Apple Silicon
+  under Rosetta 2 meanwhile; signing needs an Apple Developer ID either way.

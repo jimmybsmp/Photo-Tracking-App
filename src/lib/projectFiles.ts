@@ -1,4 +1,4 @@
-import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from 'fflate';
 import { migrate, type AssetMeta, type PendingImage, type TrackerDocument } from '@/state/schema';
 import { isDeltaFile, type DeltaFile } from './delta';
 import { importImageDataUrl } from './images';
@@ -79,10 +79,10 @@ interface AssetManifestEntry {
  * the delta file, since both bundle assets the same way.
  */
 function packAssets(assets: TrackerDocument['assets']): {
-  files: Record<string, Uint8Array>;
+  files: Zippable;
   manifest: Record<string, AssetManifestEntry>;
 } {
-  const files: Record<string, Uint8Array> = {};
+  const files: Zippable = {};
   const manifest: Record<string, AssetManifestEntry> = {};
 
   for (const hash in assets) {
@@ -91,8 +91,10 @@ function packAssets(assets: TrackerDocument['assets']): {
     const review = dataUrlToBytes(asset.reviewUrl);
     const thumbExt = EXT_FROM_MIME[thumb.mime] ?? 'bin';
     const reviewExt = EXT_FROM_MIME[review.mime] ?? 'bin';
-    files[`assets/${hash}.thumb.${thumbExt}`] = thumb.bytes;
-    files[`assets/${hash}.review.${reviewExt}`] = review.bytes;
+    // JPEG and PNG are already compressed — deflating them again costs CPU
+    // for no gain, so image entries are stored as-is (level 0).
+    files[`assets/${hash}.thumb.${thumbExt}`] = [thumb.bytes, { level: 0 }];
+    files[`assets/${hash}.review.${reviewExt}`] = [review.bytes, { level: 0 }];
     manifest[hash] = {
       hash: asset.hash,
       width: asset.width,

@@ -1,169 +1,200 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { redo, startHistory, undo } from '@/state/history';
-import { Toolbar } from '@/components/toolbar/Toolbar';
-import { StatsBar } from '@/components/toolbar/StatsBar';
-import { ContactSheet } from '@/components/grid/ContactSheet';
-import { BatchBar } from '@/components/grid/BatchBar';
-import { Inspector } from '@/components/inspector/Inspector';
-import { TrackerSheet } from '@/components/table/TrackerSheet';
+import { applicableStages } from '@/state/selectors';
 import { clearRecovery, readRecovery, writeRecovery } from '@/lib/autosave';
 import { debounce } from '@/lib/debounce';
-import { parseProjectBytes, saveProject } from '@/lib/projectFiles';
 import { desktop } from '@/lib/desktop';
-import { PIPELINE_STAGES, type TrackerDocument } from '@/state/schema';
+import { getIdentity } from '@/lib/identity';
+import { startAutoSync } from '@/lib/elvis/autoSync';
+import { parseProjectBytes } from '@/lib/projectFiles';
+import { newProjectAction, openProjectAction, printAction, saveAction } from '@/lib/fileActions';
+import { toast } from '@/lib/toast';
+import type { TrackerDocument } from '@/state/schema';
+import { TopBar } from '@/components/shell/TopBar';
+import { IdentityDialog } from '@/components/shell/IdentityDialog';
+import { Toasts } from '@/components/shell/Toasts';
+import { Overview } from '@/components/overview/Overview';
+import { ContactSheet } from '@/components/grid/ContactSheet';
+import { useFileImport } from '@/components/grid/useFileImport';
+import { Inspector } from '@/components/inspector/Inspector';
+import { TrackerSheet } from '@/components/table/TrackerSheet';
+import { ElvisPanel } from '@/components/elvis/ElvisPanel';
 
-/**
- * The autosave debounce lives at module scope rather than in a ref: it only
- * ever needs one instance for the app's whole lifetime, and a plain module
- * value is simpler than the ref-that-holds-a-function dance for something
- * with no reactive inputs of its own.
- */
-const saveRecoveryDebounced = debounce((doc: TrackerDocument) => void writeRecovery(doc), 800);
+/** One autosave scheduler for the app's lifetime. */
+const autosave = debounce((doc: TrackerDocument) => void writeRecovery(doc), 800);
 
 export default function App() {
   const view = useTrackerStore((s) => s.view);
   const activeRowId = useTrackerStore((s) => s.activeRowId);
   const revision = useTrackerStore((s) => s.revision);
-  const togglePipeline = useTrackerStore((s) => s.togglePipeline);
-  const addRow = useTrackerStore((s) => s.addRow);
-  const newProject = useTrackerStore((s) => s.newProject);
-  const setDoc = useTrackerStore((s) => s.setDoc);
-  const markSaved = useTrackerStore((s) => s.markSaved);
-  const bootedRef = useRef(false);
+  const [elvisOpen, setElvisOpen] = useState(false);
+  const [identityOpen, setIdentityOpen] = useState(() => !getIdentity());
+  const { importFiles } = useFileImport();
+  const importRef = useRef<HTMLInputElement>(null);
+  const modalOpen = elvisOpen || identityOpen;
 
-  // Undo/redo tracking starts once, for the app's lifetime.
   useEffect(() => startHistory(), []);
+  useEffect(() => startAutoSync(), []);
 
-  // Crash recovery: offer to restore whatever the last session had in
-  // flight before anything else renders meaningfully.
+  // Crash recovery, once at startup. A restored copy stays marked unsaved:
+  // it exists only in the recovery store until someone saves it.
+  const booted = useRef(false);
   useEffect(() => {
-    if (bootedRef.current) return;
-    bootedRef.current = true;
+    if (booted.current) return;
+    booted.current = true;
     void (async () => {
       const recovered = await readRecovery();
-      if (!recovered) return;
+      if (!recovered || recovered.doc.rowIds.length === 0) return;
       const bridge = desktop();
       const restore = bridge
-        ? (await bridge.promptRecovery('a previous session')).restore
-        : confirm('PhotoTrack found unsaved work from a previous session. Restore it?');
-      if (restore) setDoc(recovered, null);
-      else void clearRecovery();
+        ? (await bridge.promptRecovery('your last session')).restore
+        : confirm('PhotoTrack found unsaved work from your last session. Restore it?');
+      if (restore) {
+        useTrackerStore.getState().setDoc(recovered.doc, null, { dirty: true });
+        toast('Restored your unsaved work — save it to keep it.', 'good', 6000);
+      } else {
+        void clearRecovery();
+      }
     })();
-  }, [setDoc]);
+  }, []);
 
-  // Debounced background save to the recovery slot on every change — the
-  // fix for the old tool's unhandled `QuotaExceededError`: this never blocks
-  // typing, and a failed write (see lib/autosave.ts) is swallowed rather
-  // than silently corrupting the working session.
   useEffect(() => {
-    saveRecoveryDebounced(useTrackerStore.getState().doc);
+    if (revision > 0) autosave(useTrackerStore.getState().doc);
   }, [revision]);
 
-  // Warn before closing with unsaved changes. The desktop shell has its own
-  // native prompt, driven by telling it whether the doc is dirty.
+  // Unsaved-changes warning on close. The desktop app shows a native one.
   useEffect(() => {
     const bridge = desktop();
     if (bridge) {
       bridge.setDirty(useTrackerStore.getState().isDirty());
-      return;
+      return undefined;
     }
-    function onBeforeUnload(e: BeforeUnloadEvent) {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (!useTrackerStore.getState().isDirty()) return;
       e.preventDefault();
       e.returnValue = '';
-    }
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [revision]);
 
-  // Desktop menu wiring — a no-op in the browser build, since desktop() is
-  // undefined there.
+  // A photo dropped where nothing accepts it must never navigate the window
+  // to the image — that would throw away everything unsaved.
+  useEffect(() => {
+    const stop = (e: DragEvent) => e.preventDefault();
+    window.addEventListener('dragover', stop);
+    window.addEventListener('drop', stop);
+    return () => {
+      window.removeEventListener('dragover', stop);
+      window.removeEventListener('drop', stop);
+    };
+  }, []);
+
+  // The desktop menu bar.
   useEffect(() => {
     const bridge = desktop();
     if (!bridge) return undefined;
-
     const offs = [
-      bridge.onNew(() => newProject()),
-      bridge.onSave(() =>
-        void saveProject(useTrackerStore.getState().doc, false).then((p) => {
-          if (p) markSaved(p);
-        }),
-      ),
-      bridge.onSaveAs(() =>
-        void saveProject(useTrackerStore.getState().doc, true).then((p) => {
-          if (p) markSaved(p);
-        }),
-      ),
+      bridge.onNew(() => newProjectAction()),
+      bridge.onSave(() => void saveAction(false)),
+      bridge.onSaveAs(() => void saveAction(true)),
+      bridge.onPrint(() => printAction()),
       bridge.onUndo(() => undo()),
       bridge.onRedo(() => redo()),
       bridge.onFileOpened((bytes, path) => {
-        void parseProjectBytes(bytes).then((doc) => setDoc(doc, path));
+        void parseProjectBytes(bytes)
+          .then((doc) => useTrackerStore.getState().setDoc(doc, path))
+          .catch(() => toast('That file could not be opened.', 'bad'));
       }),
     ];
     return () => offs.forEach((off) => off());
-  }, [markSaved, newProject, setDoc]);
+  }, []);
 
-  // Keyboard shortcuts: Cmd/Ctrl+Z / Shift+Z for undo/redo, Cmd/Ctrl+S to
-  // save, N to add a row, and 1–5 to toggle a pipeline stage on the row
-  // currently open in the inspector — same hotkeys as the tool this
-  // replaces, minus the bug where they fired while a select box had focus.
+  // Keyboard. Stage hotkeys act on the shot open in the inspector: 1–5 for
+  // its magazine track (or its only track), ⇧1–5 for press release when it
+  // runs in both. Nothing fires while typing in a field or with a dialog up.
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      const key = e.key.toLowerCase();
       const target = e.target as HTMLElement;
-      const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+      const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable;
 
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+      if (mod && key === 'z' && !typing) {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+      if (mod && key === 's') {
         e.preventDefault();
-        void saveProject(useTrackerStore.getState().doc, e.shiftKey).then((p) => {
-          if (p) markSaved(p);
-        });
+        void saveAction(e.shiftKey);
         return;
       }
-      if (typing) return;
-
-      if (e.key.toLowerCase() === 'n') {
+      if (mod && key === 'o' && !desktop()) {
         e.preventDefault();
-        addRow();
+        void openProjectAction();
         return;
       }
+      if (typing || modalOpen || mod) return;
 
-      const idx = ['1', '2', '3', '4', '5'].indexOf(e.key);
-      if (idx >= 0 && activeRowId) {
-        e.preventDefault();
-        const stage = PIPELINE_STAGES[idx];
-        const row = useTrackerStore.getState().doc.rows[activeRowId];
-        if (row) {
-          if (row.usage === 'mag' || row.usage === 'both') togglePipeline(activeRowId, 'mag', stage);
-          if (row.usage === 'pr' || row.usage === 'both') togglePipeline(activeRowId, 'pr', stage);
-        }
+      const store = useTrackerStore.getState();
+      if (e.key === 'Escape') {
+        if (store.activeRowId) store.openRow(null);
+        else store.clearSelection();
+        return;
       }
-    }
+      if (key === 'n' && store.view !== 'overview') {
+        e.preventDefault();
+        store.openRow(store.addRow());
+        return;
+      }
+      const digit = /^Digit([1-5])$/.exec(e.code);
+      if (digit && store.activeRowId) {
+        const row = store.doc.rows[store.activeRowId];
+        if (!row || row.usage === 'none') return;
+        const stage = applicableStages(row)[Number(digit[1]) - 1];
+        if (!stage) return;
+        e.preventDefault();
+        const side = row.usage === 'pr' || (row.usage === 'both' && e.shiftKey) ? 'pr' : 'mag';
+        store.toggleStage(row.id, side, stage);
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeRowId, addRow, markSaved, togglePipeline]);
+  }, [modalOpen]);
 
   return (
-    <div className="app-shell">
-      <Toolbar />
-      {view === 'grid' ? (
-        <>
-          <StatsBar />
-          <BatchBar />
-          <div className="app-main">
-            <ContactSheet />
-            {activeRowId && <Inspector />}
-          </div>
-        </>
-      ) : (
-        <TrackerSheet />
-      )}
+    <div className="app">
+      <TopBar onOpenElvis={() => setElvisOpen(true)} onEditIdentity={() => setIdentityOpen(true)} />
+      <main className="app-main">
+        <div className="app-view">
+          {view === 'overview' && <Overview onImport={() => importRef.current?.click()} />}
+          {view === 'shots' && <ContactSheet />}
+          {view === 'sheet' && <TrackerSheet />}
+        </div>
+        {activeRowId && view !== 'overview' && <Inspector />}
+      </main>
+
+      <input
+        ref={importRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files) {
+            void importFiles(e.target.files);
+            useTrackerStore.getState().setView('shots');
+          }
+          e.target.value = '';
+        }}
+      />
+
+      {elvisOpen && <ElvisPanel onClose={() => setElvisOpen(false)} />}
+      {identityOpen && <IdentityDialog required={!getIdentity()} onDone={() => setIdentityOpen(false)} />}
+      <Toasts />
     </div>
   );
 }
