@@ -1,7 +1,17 @@
 /**
  * WoodWing Elvis sync — configuration and wire types.
  *
- * Two ways PhotoTrack stores tracking data on an Elvis asset:
+ * The photos are only ever read. Where the shared tracking state lives is a
+ * choice (`sharedStore`):
+ *
+ *   'file' (the default) — ONE file in Elvis, e.g. /PhotoTrack/Gala.ptdelta,
+ *     holding every shot's complete state in the delta format. Each site
+ *     downloads it, merges, and checks in a new version when it has
+ *     something the file lacks. The photos' own metadata is never written
+ *     (unless plain fields are mapped), and nothing needs an administrator:
+ *     only a folder the account can upload to.
+ *
+ *   'field' — a record per photo:
  *
  *   recordField — ONE custom text field holding the shot's complete state as
  *     JSON: both properties, every stage with who marked it and when, and the
@@ -53,6 +63,7 @@ export const MIRROR_READABLE: Array<keyof ElvisMirrorMap> = [
 ];
 
 export type ElvisAuthMode = 'login' | 'apikey' | 'basic' | 'none';
+export type ElvisSharedStore = 'file' | 'field';
 export type ElvisSearchMethod = 'GET' | 'POST';
 
 export interface ElvisConfig {
@@ -72,6 +83,10 @@ export interface ElvisConfig {
   apiKey: string;
   username: string;
   password: string;
+  /** Where the shared tracking state lives — one file, or a field on every photo. */
+  sharedStore: ElvisSharedStore;
+  /** Full Elvis path of the shared tracking file, e.g. /PhotoTrack/Gala 2026.ptdelta. */
+  trackingFile: string;
   recordField: string;
   mirror: ElvisMirrorMap;
 }
@@ -99,6 +114,8 @@ export const defaultElvisConfig: ElvisConfig = {
   apiKey: '',
   username: '',
   password: '',
+  sharedStore: 'file',
+  trackingFile: '',
   recordField: '',
   mirror: emptyMirror(),
 };
@@ -125,6 +142,10 @@ export function normalizeElvisConfig(raw: unknown): ElvisConfig {
     intervalSec: Math.max(15, Number(r.intervalSec) || defaultElvisConfig.intervalSec),
     authMode: r.authMode === 'apikey' || r.authMode === 'basic' || r.authMode === 'none' ? r.authMode : 'login',
     updatePath,
+    // A setup made before the shared file existed, already using a record
+    // field, keeps working the way it was configured.
+    sharedStore: r.sharedStore === 'field' || r.sharedStore === 'file' ? r.sharedStore : r.recordField ? 'field' : 'file',
+    trackingFile: String(r.trackingFile ?? '').trim(),
     recordField: String(r.recordField ?? ''),
     mirror,
   };
@@ -135,6 +156,8 @@ export interface ElvisHit {
   name?: string;
   thumbnailUrl?: string;
   previewUrl?: string;
+  /** The file itself — present when the account may download it. */
+  originalUrl?: string;
   metadata: Record<string, unknown>;
 }
 
@@ -176,7 +199,26 @@ export interface ElvisSearchResult extends ElvisRequestResult {
   truncated?: boolean;
 }
 
-export interface ElvisImageResult extends ElvisRequestResult {
+export interface ElvisFileResult extends ElvisRequestResult {
   bytes?: Uint8Array;
   mime?: string;
+}
+
+export type ElvisImageResult = ElvisFileResult;
+
+export interface ElvisFindResult extends ElvisRequestResult {
+  hits?: ElvisHit[];
+}
+
+export interface ElvisUpload {
+  /** Check in a new version of this asset; omitted, a new asset is created at `assetPath`. */
+  id?: string;
+  assetPath: string;
+  fileName?: string;
+  bytes: Uint8Array;
+  contentType?: string;
+}
+
+export interface ElvisUploadResult extends ElvisRequestResult {
+  id?: string;
 }

@@ -426,6 +426,9 @@ ipcMain.handle('elvis:test', async (_event, config) => elvis.test(config));
 ipcMain.handle('elvis:search', async (_event, config) => elvis.search(config));
 ipcMain.handle('elvis:update', async (_event, config, assetId, metadata) => elvis.update(config, assetId, metadata));
 ipcMain.handle('elvis:fetchImage', async (_event, config, url) => elvis.fetchImage(config, url));
+ipcMain.handle('elvis:findFile', async (_event, config, assetPath) => elvis.findFile(config, assetPath));
+ipcMain.handle('elvis:download', async (_event, config, url) => elvis.download(config, url));
+ipcMain.handle('elvis:upload', async (_event, config, file) => elvis.upload(config, file));
 
 /* ------------------------------------------------------------------ *
  * Lifecycle

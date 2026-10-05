@@ -15,7 +15,17 @@
  * base64 round trip.
  */
 
-import type { ElvisConfig, ElvisImageResult, ElvisRequestResult, ElvisSearchResult, ElvisTestResult } from './elvis/types';
+import type {
+  ElvisConfig,
+  ElvisFileResult,
+  ElvisFindResult,
+  ElvisImageResult,
+  ElvisRequestResult,
+  ElvisSearchResult,
+  ElvisTestResult,
+  ElvisUpload,
+  ElvisUploadResult,
+} from './elvis/types';
 
 export interface SaveResult {
   ok: boolean;
@@ -78,6 +88,12 @@ export interface DesktopBridge {
   /** A preview/thumbnail from the configured server only. */
   elvisFetchImage(config: ElvisConfig, url: string): Promise<ElvisImageResult>;
   elvisUpdate(config: ElvisConfig, assetId: string, metadata: Record<string, unknown>): Promise<ElvisRequestResult>;
+  /** Every asset at exactly this path — the shared tracking file. */
+  elvisFindFile(config: ElvisConfig, assetPath: string): Promise<ElvisFindResult>;
+  /** Any file, from the configured server only. */
+  elvisDownload(config: ElvisConfig, url: string): Promise<ElvisFileResult>;
+  /** A new asset at a path, or a new version of an existing one. */
+  elvisUpload(config: ElvisConfig, file: ElvisUpload): Promise<ElvisUploadResult>;
 }
 
 declare global {

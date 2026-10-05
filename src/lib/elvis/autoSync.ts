@@ -1,14 +1,22 @@
 import { create } from 'zustand';
 import { desktop } from '@/lib/desktop';
 import { importImageBytes } from '@/lib/images';
-import type { MergeSummary } from '@/lib/delta';
+import { emptySummary, summaryChanged, type DeltaFile, type MergeSummary } from '@/lib/delta';
+import { packDelta, unpackDelta } from '@/lib/projectFiles';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import type { AssetMeta, TrackerDocument } from '@/state/schema';
 import { applyPull, canPush, planPull, planPush } from './sync';
-import { defaultElvisConfig, normalizeElvisConfig, type ElvisConfig, type ElvisRequestResult } from './types';
+import { fileNeedsUpdate, isTrackingFileHit, mergeShared, sharedPayload, trackingPathProblem } from './sharedFile';
+import { defaultElvisConfig, normalizeElvisConfig, type ElvisConfig, type ElvisHit, type ElvisRequestResult } from './types';
+import type { DesktopBridge } from '@/lib/desktop';
 
 /**
  * Runs Elvis sync: pull every matching asset, merge, push back what differs.
+ *
+ * With the shared tracking file (the default), a cycle is: read the photos
+ * (new shots, pictures), then download the shared file, merge it, and check
+ * in a new version if this site has anything it lacks. With a record field
+ * instead, the shared state rides on each photo's metadata.
  *
  * It runs on a timer (every `intervalSec`), a few seconds after any local
  * edit, and when someone clicks Sync. A cycle never overlaps another; a
@@ -34,6 +42,8 @@ interface SyncState {
   assetCount: number;
   /** Writes that failed last cycle, retried next cycle. */
   failedPushes: number;
+  /** The shared tracking file as last seen: its Elvis id and version. */
+  trackingFile: { id: string; version: number | null; copies: number } | null;
 }
 
 export const useSyncStore = create<SyncState>(() => ({
@@ -45,6 +55,7 @@ export const useSyncStore = create<SyncState>(() => ({
   lastResult: '',
   assetCount: 0,
   failedPushes: 0,
+  trackingFile: null,
 }));
 
 const EDIT_DEBOUNCE_MS = 4000;
@@ -84,8 +95,10 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
 }
 
-function describe(summary: MergeSummary, pushed: number, failed: number, images: number): string {
+function describe(summary: MergeSummary, pushed: number, failed: number, images: number, file: SharedFileOutcome | null): string {
   const parts: string[] = [];
+  if (file?.created) parts.push('shared file created');
+  else if (file?.checkedIn) parts.push('shared file updated');
   if (summary.rowsAdded) parts.push(`${summary.rowsAdded} new shot${summary.rowsAdded === 1 ? '' : 's'}`);
   if (summary.rowsUpdated) parts.push(`${summary.rowsUpdated} updated`);
   if (images) parts.push(`${images} photo${images === 1 ? '' : 's'} downloaded`);
@@ -135,12 +148,15 @@ async function cycle({ link = false }: { link?: boolean }): Promise<void> {
       useSyncStore.setState({ status: 'error', lastError: found, lastResult: 'Could not reach Elvis' });
       return;
     }
-    const hits = found.hits;
+    // The tracking file is not a photo, even when the photo query reaches its folder.
+    const fileMode = config.sharedStore === 'file';
+    const hits = found.hits.filter((hit) => !(fileMode && isTrackingFileHit(hit, config)));
+    const photoConfig = fileMode ? { ...config, recordField: '' } : config;
 
     // Plan against the document as it is now; download pictures for shots
     // that have none. Pictures are content-hashed, so every site that pulls
     // the same asset ends up with the same picture key.
-    const plan = planPull(useTrackerStore.getState().doc, hits, config);
+    const plan = planPull(useTrackerStore.getState().doc, hits, photoConfig);
     const images = new Map<string, AssetMeta>();
     await pool(
       plan.filter((p) => p.imageUrl),
@@ -161,11 +177,17 @@ async function cycle({ link = false }: { link?: boolean }): Promise<void> {
     const { doc, summary } = applyPull(useTrackerStore.getState().doc, plan, images);
     if (doc !== useTrackerStore.getState().doc) applyRemote(doc);
 
+    let file: SharedFileOutcome | null = null;
+    if (fileMode) {
+      file = await syncSharedFile(bridge, config);
+      addSummary(summary, file.summary);
+    }
+
     let pushed = 0;
     let failed = 0;
-    let firstFailure: ElvisRequestResult | null = null;
-    if (canPush(config)) {
-      const pushes = planPush(useTrackerStore.getState().doc, hits, config);
+    let firstFailure: ElvisRequestResult | null = file?.error ?? null;
+    if (canPush(photoConfig)) {
+      const pushes = planPush(useTrackerStore.getState().doc, hits, photoConfig);
       await pool(pushes, PUSH_CONCURRENCY, async (item) => {
         const result = await bridge.elvisUpdate(config, item.assetId, item.metadata);
         if (result.ok) pushed++;
@@ -176,17 +198,153 @@ async function cycle({ link = false }: { link?: boolean }): Promise<void> {
       });
     }
 
+    const fileFailed = Boolean(file?.error);
     useSyncStore.setState({
-      status: failed ? 'error' : 'idle',
+      status: failed || fileFailed ? 'error' : 'idle',
       lastSyncAt: Date.now(),
       lastError: firstFailure,
-      lastResult: describe(summary, pushed, failed, images.size) + (found.truncated ? ' (query matched more than 10,000 assets — narrow it)' : ''),
-      assetCount: found.totalHits ?? hits.length,
+      lastResult: fileFailed
+        ? `Shared file: ${file?.error?.error ?? 'failed'}`
+        : describe(summary, pushed, failed, images.size, file) + (found.truncated ? ' (query matched more than 10,000 assets — narrow it)' : ''),
+      // The tracking file is not one of the shoot's assets.
+      assetCount: (found.totalHits ?? found.hits.length) - (found.hits.length - hits.length),
       failedPushes: failed,
     });
   } catch (error) {
     useSyncStore.setState({ status: 'error', lastError: { ok: false, error: String(error) }, lastResult: 'Sync failed' });
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The shared tracking file
+ * ------------------------------------------------------------------ */
+
+interface SharedFileOutcome {
+  summary: MergeSummary;
+  created: boolean;
+  checkedIn: boolean;
+  error: ElvisRequestResult | null;
+}
+
+function addSummary(into: MergeSummary, from: MergeSummary) {
+  into.rowsAdded += from.rowsAdded;
+  into.rowsUpdated += from.rowsUpdated;
+  into.rowsDeleted += from.rowsDeleted;
+  into.fieldsChanged += from.fieldsChanged;
+  into.commentsChanged += from.commentsChanged;
+  into.headerChanged = into.headerChanged || from.headerChanged;
+}
+
+/** The last download of each copy, so an unchanged version isn't fetched every minute. */
+const downloaded = new Map<string, { version: string; delta: DeltaFile }>();
+/** A file this app just created — Elvis may take a moment to list it in searches. */
+let justCreated: { path: string; id: string; at: number } | null = null;
+const INDEX_GRACE_MS = 5 * 60_000;
+
+const versionOf = (hit: ElvisHit): string | null => {
+  const m = hit.metadata ?? {};
+  const v = m.versionNumber ?? m.assetFileModified ?? m.fileModified;
+  const raw = v && typeof v === 'object' ? (v as Record<string, unknown>).value : v;
+  return raw === undefined || raw === null || raw === '' ? null : String(raw);
+};
+
+const fileFailure = (error: string, extra: Partial<ElvisRequestResult> = {}): ElvisRequestResult => ({
+  ok: false,
+  stage: 'shared file',
+  error,
+  ...extra,
+});
+
+async function readCopy(bridge: DesktopBridge, config: ElvisConfig, hit: ElvisHit): Promise<DeltaFile | ElvisRequestResult> {
+  const version = versionOf(hit);
+  const cached = downloaded.get(hit.id);
+  if (version && cached && cached.version === version) return cached.delta;
+  if (!hit.originalUrl) {
+    return fileFailure('Elvis lists the shared file but offers no download for it — this account needs permission to download originals.');
+  }
+  const got = await bridge.elvisDownload(config, hit.originalUrl);
+  if (!got.ok || !got.bytes) return { ...got, ok: false, stage: 'shared file' };
+  try {
+    const delta = unpackDelta(got.bytes);
+    if (version) downloaded.set(hit.id, { version, delta });
+    return delta;
+  } catch {
+    return fileFailure(
+      `The file at ${config.trackingFile} isn't a PhotoTrack tracking file, so PhotoTrack won't overwrite it. Choose another path.`,
+    );
+  }
+}
+
+/**
+ * Download every copy of the file, merge, and check in a new version if this
+ * site has anything the file lacks. Never writes over a file it couldn't read.
+ */
+async function syncSharedFile(bridge: DesktopBridge, config: ElvisConfig): Promise<SharedFileOutcome> {
+  const outcome: SharedFileOutcome = { summary: emptySummary(), created: false, checkedIn: false, error: null };
+  const path = config.trackingFile.trim();
+  const problem = trackingPathProblem(path);
+  if (problem) {
+    outcome.error = fileFailure(problem);
+    return outcome;
+  }
+
+  const found = await bridge.elvisFindFile(config, path);
+  if (!found.ok || !found.hits) {
+    outcome.error = { ...found, ok: false, stage: 'shared file' };
+    return outcome;
+  }
+  const hits = found.hits;
+
+  const copies: DeltaFile[] = [];
+  for (const hit of hits) {
+    const copy = await readCopy(bridge, config, hit);
+    if ('kind' in copy) copies.push(copy);
+    else {
+      outcome.error = copy;
+      return outcome;
+    }
+  }
+
+  // Merge into the project as it is at this moment, never a stale snapshot.
+  if (copies.length) {
+    const merged = mergeShared(useTrackerStore.getState().doc, copies);
+    if (summaryChanged(merged.summary)) applyRemote(merged.doc);
+    outcome.summary = merged.summary;
+  }
+
+  const primary = hits[0];
+  useSyncStore.setState({
+    trackingFile: primary ? { id: primary.id, version: Number(primary.metadata?.versionNumber) || null, copies: hits.length } : null,
+  });
+
+  if (!primary && justCreated && justCreated.path === path && Date.now() - justCreated.at < INDEX_GRACE_MS) {
+    // Created moments ago and not searchable yet: wait rather than make a second one.
+    return outcome;
+  }
+
+  const doc = useTrackerStore.getState().doc;
+  if (!fileNeedsUpdate(doc, copies[0] ?? null)) return outcome;
+
+  const payload = sharedPayload(doc);
+  const result = await bridge.elvisUpload(config, {
+    id: primary?.id,
+    assetPath: path,
+    fileName: path.slice(path.lastIndexOf('/') + 1),
+    bytes: packDelta(payload),
+    contentType: 'application/octet-stream',
+  });
+  if (!result.ok) {
+    outcome.error = { ...result, stage: 'shared file' };
+    return outcome;
+  }
+  if (primary) {
+    outcome.checkedIn = true;
+    downloaded.delete(primary.id);
+  } else {
+    outcome.created = true;
+    justCreated = { path, id: result.id ?? '', at: Date.now() };
+  }
+  return outcome;
 }
 
 /* ------------------------------------------------------------------ *

@@ -1,7 +1,7 @@
 {
   "name": "phototrack",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Photo production tracker — the shot list from capture to approval, one grid per production.",
   "type": "module",
   "main": "electron/main.cjs",

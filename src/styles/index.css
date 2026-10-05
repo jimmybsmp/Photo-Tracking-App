@@ -285,6 +285,18 @@ textarea.field {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* An option with a sentence of explanation: the control stays at the first line. */
+.choice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  line-height: 1.4;
+}
+.choice-row input {
+  margin-top: 3px;
+  flex: none;
+}
 
 .segmented {
   display: inline-flex;

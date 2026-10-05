@@ -75,8 +75,9 @@ npm run typecheck && npm run build && npm test
 ```
 
 `npm test` = `tests/logic.test.ts` (bundled by esbuild; migration, longshot
-rule, undo, comments, delta, three sites syncing through a simulated Elvis)
-plus the Elvis protocol tests against the mock server.
+rule, undo, comments, delta, three sites syncing through a simulated Elvis
+record field, and three sites sharing one tracking file through the real
+client and the mock server) plus the Elvis protocol tests against the mock.
 
 `npm run build` also asserts the output loads from `file://` — see
 `scripts/check-file-protocol.mjs` for the three ways it silently doesn't.
@@ -94,9 +95,23 @@ needs. `scripts/mock-elvis-server.mjs` is strict about all of this on purpose
 — if a change makes it fail, a real server would fail too. Image downloads go
 only to the configured server's origin: the request carries the login.
 
-Sync (`lib/elvis/sync.ts` rules, `lib/elvis/autoSync.ts` I/O): the **record
-field** holds the shot's full state as canonical JSON — fields, stamps,
-comments — and merges with `mergeRow`, the same merge delta files use. Plain
+Sync (`lib/elvis/sync.ts` and `lib/elvis/sharedFile.ts` rules,
+`lib/elvis/autoSync.ts` I/O) never writes to the photos unless plain mirror
+fields are mapped. The shared state lives in one of two places
+(`config.sharedStore`):
+
+- **The shared file** (default): one `.ptdelta` per shoot at a path every
+  site enters identically. A cycle downloads every copy at that path, merges
+  with `mergeDelta`, and checks in a new version (`update` + `Filedata`) only
+  when `fileNeedsUpdate` says the file lacks something — so idle sites never
+  write and a lost race heals on the next cycle. Elvis-linked rows go in
+  without `imageHash` (each site gets the picture from the asset itself);
+  only dropped photos carry pixels. Never write over a file that doesn't
+  unpack as a delta, and never let the file become a shot
+  (`isTrackingFileHit`).
+- **The record field**: holds the shot's full state as canonical JSON —
+  fields, stamps, comments — and merges with `mergeRow`, the same merge delta
+  files use. Plain
 "mirror" fields are written for people in Elvis and read *only* when an asset
 has no record yet; they carry no stamps, so they must never override a record.
 Push writes only fields whose value differs from what the preceding pull saw.

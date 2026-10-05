@@ -13,7 +13,15 @@ import { startHistory, undo } from '@/state/history';
 import { setIdentity } from '@/lib/identity';
 import { buildDelta, mergeDelta } from '@/lib/delta';
 import { applyPull, planPull, planPush, recordFor } from '@/lib/elvis/sync';
-import { normalizeElvisConfig, type ElvisHit } from '@/lib/elvis/types';
+import { normalizeElvisConfig, type ElvisConfig, type ElvisHit } from '@/lib/elvis/types';
+import { syncNow, useSyncStore } from '@/lib/elvis/autoSync';
+import { sharedPayload } from '@/lib/elvis/sharedFile';
+import { packDelta, unpackDelta } from '@/lib/projectFiles';
+import type { DesktopBridge } from '@/lib/desktop';
+// The real Elvis client against the strict mock server, over plain Node HTTP.
+import { createElvisClient } from '../electron/elvisClient.cjs';
+import { startMockElvis, USER, PASSWORD } from '../scripts/mock-elvis-server.mjs';
+import { nodeTransport } from '../scripts/node-transport.mjs';
 
 let failures = 0;
 function check(label: string, cond: boolean, extra?: unknown) {
@@ -271,6 +279,131 @@ async function main() {
     const deletedNow = london;
     london = await sync(london, 'London');
     check('a shot deleted here is not pulled back in', !london.rows[a2] && deletedNow.deletedRowIds[a2] !== undefined);
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log('\nElvis: three sites, one shared tracking file (real client, mock server)');
+  {
+    const server = await startMockElvis({ assetCount: 3 });
+    const client = createElvisClient(nodeTransport());
+    const bridge = {
+      elvisSearch: (c: ElvisConfig) => client.search(c),
+      elvisFetchImage: (c: ElvisConfig, url: string) => client.fetchImage(c, url),
+      elvisUpdate: (c: ElvisConfig, id: string, metadata: Record<string, unknown>) => client.update(c, id, metadata),
+      elvisFindFile: (c: ElvisConfig, path: string) => client.findFile(c, path),
+      elvisDownload: (c: ElvisConfig, url: string) => client.download(c, url),
+      elvisUpload: (c: ElvisConfig, file: Parameters<DesktopBridge['elvisUpload']>[1]) => client.upload(c, file),
+    } as unknown as DesktopBridge;
+    (globalThis as unknown as { window: unknown }).window = { phototrack: bridge };
+
+    const PATH = '/PhotoTrack/Gala 2026.ptdelta';
+    const config = normalizeElvisConfig({ endpoint: server.origin, username: USER, password: PASSWORD, query: '*', trackingFile: PATH });
+    check('a new setup shares through one file by default', config.sharedStore === 'file');
+    check('a setup already using a record field keeps it', normalizeElvisConfig({ recordField: 'cf_photoTrack' }).sharedStore === 'field');
+    useSyncStore.setState({ config });
+
+    const run = async (doc: TrackerDocument, who: string, link = false) => {
+      setIdentity({ name: who, role: who === 'Exec' ? 'executive' : 'staff' });
+      useTrackerStore.setState({ doc });
+      await tick();
+      await syncNow({ link });
+      return store().doc;
+    };
+    const fresh = () => (store().newProject(), store().doc);
+    const fileAssets = () => server.state.assets.filter((a: { metadata: { assetPath?: string } }) => a.metadata.assetPath === PATH);
+    const rowFor = (doc: TrackerDocument, asset: string): ShotRow => doc.rows[doc.rowIds.find((id) => doc.rows[id].elvisAssetId === asset) as string];
+    const uploads = () => server.state.uploads.length;
+
+    let london = await run(fresh(), 'London', true);
+    check('first pull brings in the photos', london.rowIds.length === 3, london.rowIds.length);
+    check('…creates the one shared file at the chosen path', fileAssets().length === 1 && uploads() === 1, server.state.uploads);
+    check('…and never writes to the photos', server.state.updates.length === 0, server.state.updates);
+
+    let ny = await run(fresh(), 'NewYork', true);
+    check('a second site gets the same shots', ny.rowIds.join() === london.rowIds.join());
+    check('the tracking file is never mistaken for a shot', ny.rowIds.every((id) => !/\.ptdelta$/i.test(ny.rows[id].elvisName)), ny.rowIds.map((id) => ny.rows[id].elvisName));
+    check('a site with nothing new checks nothing in', uploads() === 1, server.state.uploads);
+
+    const a1 = rowFor(london, 'A1').id;
+    london = await onSite(london, 'London', () => {
+      store().setField(a1, 'usage', 'both');
+      store().setStage(a1, 'mag', 'retouched', true);
+      store().setField(a1, 'mag.position', '14');
+    });
+    london = await run(london, 'London');
+    check('an edit checks in a new version of the same file', uploads() === 2 && fileAssets().length === 1 && fileAssets()[0].metadata.versionNumber === 2, server.state.uploads);
+
+    ny = await onSite(ny, 'NewYork', () => {
+      store().setField(a1, 'pr.retoucher', 'NYC team');
+      store().setStage(a1, 'pr', 'retouched', true);
+    });
+    ny = await run(ny, 'NewYork');
+    check('New York gets London’s work and adds its own', rowFor(ny, 'A1').mag.pipeline.retouched && rowFor(ny, 'A1').mag.position === '14' && uploads() === 3);
+    check('who did it travels in the file', rowFor(ny, 'A1').fieldTimes['mag.pipeline.retouched']?.u === 'London');
+
+    let exec = await run(fresh(), 'Exec', true);
+    check('a third site starting empty gets everything', rowFor(exec, 'A1').pr.retoucher === 'NYC team' && rowFor(exec, 'A1').mag.pipeline.retouched);
+    exec = await onSite(exec, 'Exec', () => store().addComment(a1, { kind: 'concern', text: 'Spread 14 too dark', side: 'mag' }));
+    exec = await run(exec, 'Exec');
+
+    // Two sites check in at the same moment: the later version lacks the
+    // earlier one's change. Simulated by putting the previous version back.
+    const fileId = fileAssets()[0].id;
+    const withConcern = server.state.files.get(fileId);
+    const beforeConcern = Buffer.from(packDelta(sharedPayload(ny)));
+    server.state.files.set(fileId, beforeConcern);
+    fileAssets()[0].metadata.versionNumber += 1;
+    check('(race set up: the file has lost the concern)', Object.keys(unpackDelta(new Uint8Array(beforeConcern)).rows[a1].comments).length === 0 && !!withConcern);
+    const beforeRetry = uploads();
+    exec = await run(exec, 'Exec');
+    check('…the site whose change was lost notices and checks it in again', uploads() === beforeRetry + 1, { beforeRetry, after: uploads() });
+    london = await run(london, 'London');
+    const concern = openConcerns(rowFor(london, 'A1')).find((c) => c.author === 'Exec');
+    check('…and it arrives at the other sites', Boolean(concern));
+
+    london = await onSite(london, 'London', () => store().setCommentResolved(a1, concern!.id, true));
+    london = await run(london, 'London');
+    exec = await run(exec, 'Exec');
+    const back = rowFor(exec, 'A1').comments[concern!.id];
+    check('the resolution comes back to the executive', back?.resolved && back.resolvedBy === 'London');
+
+    const before = uploads();
+    ny = await run(ny, 'NewYork');
+    ny = await run(ny, 'NewYork');
+    exec = await run(exec, 'Exec');
+    london = await run(london, 'London');
+    check('once everyone is in step, idle syncs write nothing', uploads() === before, { before, after: uploads() });
+
+    const a3 = rowFor(london, 'A3').id;
+    london = await onSite(london, 'London', () => store().deleteRows([a3]));
+    london = await run(london, 'London');
+    ny = await run(ny, 'NewYork');
+    ny = await run(ny, 'NewYork');
+    check('a deleted shot goes at every site and the photo pull doesn’t bring it back', !ny.rows[a3] && !london.rows[a3]);
+
+    // Two copies at the path (two sites created it at once): both are read.
+    const stray = sharedPayload(exec);
+    stray.rows = { [a1]: { ...stray.rows[a1], comments: { x1: { ...back!, id: 'x1', text: 'From the second copy', resolved: false, resolvedBy: '', resolvedAt: 0, resolvedDevice: '' } } } };
+    server.state.assets.push({ id: 'Z9', metadata: { filename: 'Gala 2026.ptdelta', name: 'Gala 2026.ptdelta', folderPath: '/PhotoTrack', assetPath: PATH, versionNumber: 1 } });
+    server.state.files.set('Z9', Buffer.from(packDelta(stray)));
+    ny = await run(ny, 'NewYork');
+    check('a second copy of the file is merged, not ignored', Boolean(rowFor(ny, 'A1').comments.x1));
+    check('…and the first copy is the one kept up to date', unpackDelta(new Uint8Array(server.state.files.get(fileId))).rows[a1].comments.x1 !== undefined);
+
+    // Something that isn't ours at the path is never overwritten.
+    const foreignPath = '/PhotoTrack/Notes.ptdelta';
+    server.state.assets.push({ id: 'Q1', metadata: { filename: 'Notes.ptdelta', name: 'Notes.ptdelta', folderPath: '/PhotoTrack', assetPath: foreignPath, versionNumber: 1 } });
+    server.state.files.set('Q1', Buffer.from('not a zip'));
+    useSyncStore.setState({ config: { ...config, trackingFile: foreignPath } });
+    const n0 = uploads();
+    ny = await run(ny, 'NewYork');
+    check('a file at the path that isn’t PhotoTrack’s is left alone, with a reason', uploads() === n0 && useSyncStore.getState().status === 'error' && /isn't a PhotoTrack/.test(useSyncStore.getState().lastResult), useSyncStore.getState().lastResult);
+    useSyncStore.setState({ config: { ...config, trackingFile: 'Gala.ptdelta' } });
+    ny = await run(ny, 'NewYork');
+    check('a path without a folder is refused with a reason', /folder/.test(useSyncStore.getState().lastResult), useSyncStore.getState().lastResult);
+
+    check('across all of it, no photo’s metadata was written', server.state.updates.length === 0, server.state.updates);
+    await server.close();
   }
 
   console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed');

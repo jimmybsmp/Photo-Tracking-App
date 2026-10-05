@@ -6,36 +6,12 @@
  * Electron's `net` (the protocol logic is identical either way — only the
  * socket layer differs). `npm run test:elvis`.
  */
-import http from 'node:http';
 import { createRequire } from 'node:module';
 import { startMockElvis, USER, PASSWORD } from './mock-elvis-server.mjs';
+import { nodeTransport } from './node-transport.mjs';
 
 const require = createRequire(import.meta.url);
 const { createElvisClient, resolveBase } = require('../electron/elvisClient.cjs');
-
-/** Node transport with the cookie handling Chromium's session would provide. */
-function nodeTransport() {
-  const jar = new Map();
-  return ({ url, method, headers, body }) =>
-    new Promise((resolve, reject) => {
-      const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-      const req = http.request(url, { method, headers: cookie ? { ...headers, Cookie: cookie } : headers }, (res) => {
-        for (const line of [].concat(res.headers['set-cookie'] || [])) {
-          const [pair] = line.split(';');
-          const [k, v] = pair.split('=');
-          jar.set(k.trim(), v);
-        }
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () =>
-          resolve({ status: res.statusCode, contentType: res.headers['content-type'] || '', body: Buffer.concat(chunks) }),
-        );
-      });
-      req.on('error', reject);
-      if (body) req.write(body);
-      req.end();
-    });
-}
 
 let failures = 0;
 const check = (label, cond, extra) => {
@@ -117,6 +93,45 @@ console.log('\npaging, images, field discovery');
   await client.update(cfg, 'A1', { cf_photoTrack: '{"x":1}' });
   const after = await client.search(cfg, { num: 1 });
   check('a write is visible on the next search', after.hits?.[0]?.metadata?.cf_photoTrack === '{"x":1}', after.hits?.[0]?.metadata);
+  await server.close();
+}
+
+console.log('\nshared tracking file');
+for (const dialect of ['token', 'cookie']) {
+  const server = await startMockElvis({ dialect });
+  const client = createElvisClient(nodeTransport());
+  const cfg = config(server.origin);
+  const path = '/PhotoTrack/Gala "Night" 2026.ptdelta';
+
+  const none = await client.findFile(cfg, path);
+  check(`${dialect}: no file yet → found nothing, not an error`, none.ok && none.hits.length === 0, none);
+
+  const v1 = new Uint8Array([0x50, 0x4b, 0, 1, 2, 3, 255, 13, 10]);
+  const created = await client.upload(cfg, { assetPath: path, bytes: v1 });
+  check(`${dialect}: file created at the path (multipart, Filedata)`, created.ok && !!created.id, created);
+
+  const found = await client.findFile(cfg, path);
+  check(`${dialect}: found again by its exact path`, found.ok && found.hits.length === 1 && found.hits[0].id === created.id, found);
+  const got = await client.download(cfg, found.hits[0].originalUrl);
+  check(`${dialect}: downloads byte-for-byte, binary intact`, got.ok && Buffer.from(got.bytes).equals(Buffer.from(v1)), got);
+
+  const again = await client.upload(cfg, { assetPath: path, bytes: v1 });
+  check(`${dialect}: creating a second file at the same path is refused`, !again.ok && again.status === 409, again);
+
+  const v2 = new Uint8Array([9, 8, 7]);
+  const replaced = await client.upload(cfg, { id: created.id, assetPath: path, bytes: v2 });
+  const after = await client.findFile(cfg, path);
+  const got2 = await client.download(cfg, after.hits[0].originalUrl);
+  check(`${dialect}: a replace is a new version of the same asset`, replaced.ok && after.hits.length === 1 && after.hits[0].id === created.id && after.hits[0].metadata.versionNumber === 2, after.hits);
+  check(`${dialect}: …and the download is the new version`, got2.ok && Buffer.from(got2.bytes).equals(Buffer.from(v2)), got2);
+
+  const elsewhere = await client.findFile(cfg, '/PhotoTrack/Other.ptdelta');
+  check(`${dialect}: another shoot's path finds nothing`, elsewhere.ok && elsewhere.hits.length === 0, elsewhere);
+  const foreign = await client.download(cfg, 'https://elsewhere.example/file/F1');
+  check(`${dialect}: refuses to send the login to another host`, !foreign.ok && /Refusing/.test(foreign.error), foreign);
+  const badPath = await client.findFile(cfg, 'Gala.ptdelta');
+  check(`${dialect}: a path without a folder is explained`, !badPath.ok && /full path/.test(badPath.error), badPath);
+  check(`${dialect}: photo metadata untouched by any of it`, server.state.updates.length === 0, server.state.updates);
   await server.close();
 }
 

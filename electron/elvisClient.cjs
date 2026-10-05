@@ -20,6 +20,10 @@
  * `metadata` (a JSON-encoded string); `updatebulk` takes a query `q` in place
  * of `id`. A login also consumes one of the server's API licences, so the
  * session is cached and reused rather than logging in per request.
+ *
+ * Files go up as multipart: `create` takes `Filedata` plus the `assetPath`
+ * to put it at; `update` with `Filedata` checks the file in as a new version
+ * of the same asset, so a shared file keeps one id however often it changes.
  */
 
 const DEFAULT_TIMEOUT_NOTE = 'no response within 20 seconds';
@@ -51,6 +55,30 @@ const formBody = (params) =>
     .filter(([, v]) => v !== undefined && v !== null)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
     .join('&');
+
+/** A multipart/form-data body — how Elvis takes a file (`Filedata`) with its parameters. */
+function multipartBody(fields, file) {
+  const boundary = `----PhotoTrack${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+  const parts = [];
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue;
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${String(value)}\r\n`, 'utf8'));
+  }
+  const safeName = String(file.fileName).replace(/["\r\n]/g, '_');
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="Filedata"; filename="${safeName}"\r\n` +
+        `Content-Type: ${file.contentType || 'application/octet-stream'}\r\n\r\n`,
+      'utf8',
+    ),
+    Buffer.from(file.bytes),
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+  );
+  return { body: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
+/** Quote a value for an Elvis (Lucene) query: only `"` and `\` need escaping inside quotes. */
+const quoteQuery = (value) => `"${String(value).replace(/(["\\])/g, '\\$1')}"`;
 
 function parseJson(text) {
   if (!text) return null;
@@ -145,11 +173,15 @@ function createElvisClient(transport) {
   }
 
   /** One HTTP exchange, with every failure turned into a uniform result. */
-  async function exchange(stage, url, { method = 'POST', headers = {}, params } = {}) {
+  async function exchange(stage, url, { method = 'POST', headers = {}, params, multipart } = {}) {
     let target = url;
     let body;
     const sendHeaders = { Accept: 'application/json', ...headers };
-    if (params) {
+    if (multipart) {
+      const built = multipartBody(multipart.fields, multipart.file);
+      body = built.body;
+      sendHeaders['Content-Type'] = built.contentType;
+    } else if (params) {
       if (method === 'GET') {
         target = `${url}${url.includes('?') ? '&' : '?'}${formBody(params)}`;
       } else {
@@ -261,18 +293,19 @@ function createElvisClient(transport) {
         name: metadata.filename ?? metadata.name ?? hit.name,
         thumbnailUrl: hit.thumbnailUrl ?? metadata.thumbnailUrl,
         previewUrl: hit.previewUrl ?? metadata.previewUrl,
+        originalUrl: hit.originalUrl ?? metadata.originalUrl,
         metadata,
       };
     });
   }
 
-  async function searchPage(config, { num, start }) {
+  async function searchPage(config, { num, start, q }) {
     const resolved = resolveBase(config.endpoint);
     if (!resolved.ok) return { ok: false, stage: 'address', error: resolved.error };
     const method = config.searchMethod === 'GET' ? 'GET' : 'POST';
     const result = await authed('search', resolved.base, config, config.searchPath || '/search', {
       method,
-      params: { q: config.query || '*', start, num, metadataToReturn: 'all' },
+      params: { q: q || config.query || '*', start, num, metadataToReturn: 'all' },
     });
     if (!result.ok) return result;
     const hits = normalizeHits(result.body);
@@ -285,13 +318,13 @@ function createElvisClient(transport) {
    * hits one request returns, so a shoot bigger than one page would silently
    * lose its tail without this.
    */
-  async function search(config, { num, limit = MAX_ASSETS } = {}) {
-    if (num) return searchPage(config, { num, start: 0 });
+  async function search(config, { num, limit = MAX_ASSETS, q } = {}) {
+    if (num) return searchPage(config, { num, start: 0, q });
     const hits = [];
     let totalHits = 0;
     let url;
     for (let start = 0; start < limit; start += PAGE_SIZE) {
-      const page = await searchPage(config, { num: PAGE_SIZE, start });
+      const page = await searchPage(config, { num: PAGE_SIZE, start, q });
       if (!page.ok) return page;
       url = page.url;
       totalHits = page.totalHits;
@@ -302,18 +335,18 @@ function createElvisClient(transport) {
   }
 
   /**
-   * Download a preview or thumbnail. Only from the configured Elvis server:
-   * the request carries the login, and a URL supplied in a search result
-   * must never be able to send that login to some other host.
+   * Download a file from the configured Elvis server only: the request
+   * carries the login, and a URL supplied in a search result must never be
+   * able to send that login to some other host.
    */
-  async function fetchImage(config, imageUrl) {
+  async function download(config, fileUrl, { accept = '*/*', imageOnly = false } = {}) {
     const resolved = resolveBase(config.endpoint);
     if (!resolved.ok) return { ok: false, error: resolved.error };
     let target;
     try {
-      target = new URL(imageUrl, resolved.base + '/');
+      target = new URL(fileUrl, resolved.base + '/');
     } catch {
-      return { ok: false, error: 'Invalid image address' };
+      return { ok: false, error: 'Invalid file address' };
     }
     if (target.origin !== new URL(resolved.base).origin) {
       return { ok: false, error: `Refusing to send the Elvis login to ${target.origin}` };
@@ -322,14 +355,64 @@ function createElvisClient(transport) {
     if (!auth.ok) return auth;
     let response;
     try {
-      response = await transport({ url: target.toString(), method: 'GET', headers: { ...auth.headers, Accept: 'image/*' } });
+      // no-cache: a shared file changes under the same address between syncs.
+      response = await transport({ url: target.toString(), method: 'GET', headers: { ...auth.headers, Accept: accept, 'Cache-Control': 'no-cache' } });
     } catch (error) {
       return { ok: false, error: String(error && error.message ? error.message : error) };
     }
     if (response.status < 200 || response.status >= 300) return { ok: false, status: response.status, error: `HTTP ${response.status}` };
     const contentType = String(response.contentType || '').split(';')[0].trim();
-    if (contentType && !contentType.startsWith('image/')) return { ok: false, error: `Not an image (${contentType})` };
-    return { ok: true, bytes: new Uint8Array(response.body), mime: contentType || 'image/jpeg' };
+    if (imageOnly && contentType && !contentType.startsWith('image/')) return { ok: false, error: `Not an image (${contentType})` };
+    return { ok: true, bytes: new Uint8Array(response.body), mime: contentType || (imageOnly ? 'image/jpeg' : 'application/octet-stream') };
+  }
+
+  /** A preview or thumbnail. */
+  const fetchImage = (config, imageUrl) => download(config, imageUrl, { accept: 'image/*', imageOnly: true });
+
+  /**
+   * Every asset at exactly `assetPath`. Searched by folder and matched here,
+   * not by an assetPath query: folder search is what every Elvis version
+   * indexes the same way, and an exact match decided on this side can't be
+   * loosened by how a server tokenises paths. Normally zero or one hit; more
+   * than one happens only if two sites created the file at the same moment.
+   */
+  async function findFile(config, assetPath) {
+    const path = String(assetPath || '').trim();
+    const slash = path.lastIndexOf('/');
+    if (slash < 0 || slash === path.length - 1) return { ok: false, stage: 'file', error: `"${path}" is not a full path like /PhotoTrack/Gala.ptdelta` };
+    const folder = path.slice(0, slash) || '/';
+    const found = await search(config, { q: `folderPath:${quoteQuery(folder)}`, limit: 2000 });
+    if (!found.ok) return found;
+    const want = path.toLowerCase();
+    const pathOf = (hit) => {
+      const m = hit.metadata || {};
+      const direct = typeof m.assetPath === 'string' ? m.assetPath : '';
+      if (direct) return direct;
+      const folderPath = typeof m.folderPath === 'string' ? m.folderPath : '';
+      const name = typeof m.filename === 'string' ? m.filename : typeof m.name === 'string' ? m.name : '';
+      return folderPath && name ? `${folderPath.replace(/\/+$/, '')}/${name}` : '';
+    };
+    const hits = found.hits
+      .filter((hit) => pathOf(hit).toLowerCase() === want)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return { ok: true, url: found.url, hits };
+  }
+
+  /**
+   * Put a file into Elvis: a new asset at `assetPath`, or — given `id` — a
+   * new version of that asset. Returns the asset id either way.
+   */
+  async function upload(config, { id, assetPath, fileName, bytes, contentType }) {
+    const resolved = resolveBase(config.endpoint);
+    if (!resolved.ok) return { ok: false, stage: 'address', error: resolved.error };
+    const name = fileName || String(assetPath || '').split('/').pop() || 'file';
+    const file = { fileName: name, bytes, contentType };
+    const result = id
+      ? await authed('upload', resolved.base, config, '/update', { method: 'POST', multipart: { fields: { id }, file } })
+      : await authed('upload', resolved.base, config, '/create', { method: 'POST', multipart: { fields: { assetPath }, file } });
+    if (!result.ok) return result;
+    const body = result.body || {};
+    return { ok: true, url: result.url, status: result.status, id: String(body.id ?? id ?? '') };
   }
 
   async function update(config, assetId, metadata) {
@@ -404,7 +487,7 @@ function createElvisClient(transport) {
     sessions.clear();
   }
 
-  return { test, search, update, fetchImage, forget };
+  return { test, search, update, fetchImage, download, findFile, upload, forget };
 }
 
 module.exports = { createElvisClient, resolveBase };

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { desktop, isDesktop } from '@/lib/desktop';
 import { saveElvisConfig, syncNow, useSyncStore } from '@/lib/elvis/autoSync';
 import { canPush } from '@/lib/elvis/sync';
+import { TRACKING_FOLDER, suggestTrackingPath, trackingPathProblem } from '@/lib/elvis/sharedFile';
 import {
   MIRROR_LABELS,
   type ElvisConfig,
@@ -30,6 +31,11 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
   const assetCount = useSyncStore((s) => s.assetCount);
   const linked = useTrackerStore((s) => s.doc.elvisLinked);
   const shotCount = useTrackerStore((s) => s.doc.rowIds.length);
+  const shootEvent = useTrackerStore((s) => s.doc.header.event);
+  const shootName = useTrackerStore((s) => s.doc.header.name);
+  const fileId = useSyncStore((s) => s.trackingFile?.id ?? null);
+  const fileVersion = useSyncStore((s) => s.trackingFile?.version ?? null);
+  const fileCopies = useSyncStore((s) => s.trackingFile?.copies ?? 0);
   const [config, setConfig] = useState<ElvisConfig>(stored);
   const [steps, setSteps] = useState<ElvisTestStep[]>([]);
   const [fields, setFields] = useState<ElvisSampleField[]>([]);
@@ -62,6 +68,7 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
     [],
   );
 
+  const suggestedPath = suggestTrackingPath({ event: shootEvent, name: shootName });
   const sampleOf = useMemo(() => new Map(fields.map((f) => [f.name, f.sample])), [fields]);
 
   if (!isDesktop()) {
@@ -181,33 +188,85 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
         )}
       </Section>
 
-      <Section n={3} title="Shared PhotoTrack record (recommended)">
+      <Section n={3} title="Where the team's tracking is shared">
         <p className="small">
-          One multi-line text field on each asset where PhotoTrack keeps the shot's full tracking state — both
-          properties, who marked each stage and when, and every note and concern. With it, sites anywhere merge each
-          other's work field by field and nobody's changes overwrite anyone else's.{' '}
-          <strong>An Elvis administrator has to create this field once</strong> (multi-line text, editable by the
-          sync account).
+          The photos are only ever read. The tracking itself — both properties, who marked each stage and when, every
+          note and concern — is shared through Elvis so that every site merges everyone else's work.
         </p>
-        <label className="field-label">
-          <span>Record field name</span>
-          {fieldInput(config.recordField, (v) => update({ recordField: v }), SUGGESTED_RECORD_FIELD)}
+        <label className="choice-row">
+          <input type="radio" name="shared-store" checked={config.sharedStore === 'file'} onChange={() => update({ sharedStore: 'file' })} />
+          <span>
+            <strong>One shared file</strong> (recommended) — a single file per shoot in a folder of its own. Nothing
+            needs setting up in Elvis beyond the folder.
+          </span>
         </label>
-        {!config.recordField && (
-          <div className="notice">
-            Without it, only the plain fields below are shared — no who/when, and notes and concerns stay on this
-            computer.{' '}
-            <button className="link-btn" onClick={() => update({ recordField: SUGGESTED_RECORD_FIELD })}>
-              Use “{SUGGESTED_RECORD_FIELD}”
-            </button>
-          </div>
+        <label className="choice-row">
+          <input type="radio" name="shared-store" checked={config.sharedStore === 'field'} onChange={() => update({ sharedStore: 'field' })} />
+          <span>
+            <strong>A field on every photo</strong> — needs an Elvis administrator to create a multi-line text field.
+          </span>
+        </label>
+
+        {config.sharedStore === 'file' ? (
+          <>
+            <label className="field-label">
+              <span>Shared file in Elvis</span>
+              <input
+                className="field"
+                value={config.trackingFile}
+                placeholder={`${TRACKING_FOLDER}/Gala 2026.ptdelta`}
+                onChange={(e) => update({ trackingFile: e.target.value })}
+              />
+            </label>
+            {trackingPathProblem(config.trackingFile) ? (
+              <div className="notice">
+                {trackingPathProblem(config.trackingFile)}{' '}
+                {!config.trackingFile.trim() && (
+                  <button
+                    className="link-btn"
+                    onClick={() => update({ trackingFile: suggestedPath })}
+                  >
+                    Use “{suggestedPath}”
+                  </button>
+                )}
+              </div>
+            ) : null}
+            <p className="muted small">
+              Create the folder in Elvis first, outside the shoot's photo folders, so it never turns up among the
+              pictures. Every site enters the <strong>same path</strong>; the first sync creates the file. Each change
+              is saved as a new version of that one file, so it appears once in Elvis however much work goes through
+              it. The file opens anywhere with File → Import changes.
+            </p>
+            {fileId && (
+              <p className="muted small">
+                Found in Elvis{fileVersion ? ` — version ${fileVersion}` : ''}.
+                {fileCopies > 1 && ` There are ${fileCopies} files at this path; PhotoTrack reads them all and keeps the first up to date — the others can be deleted.`}
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <label className="field-label">
+              <span>Record field name</span>
+              {fieldInput(config.recordField, (v) => update({ recordField: v }), SUGGESTED_RECORD_FIELD)}
+            </label>
+            {!config.recordField && (
+              <div className="notice">
+                Without it, only the plain fields below are shared — no who/when, and notes and concerns stay on this
+                computer.{' '}
+                <button className="link-btn" onClick={() => update({ recordField: SUGGESTED_RECORD_FIELD })}>
+                  Use “{SUGGESTED_RECORD_FIELD}”
+                </button>
+              </div>
+            )}
+          </>
         )}
       </Section>
 
       <Section n={4} title="Plain fields (optional)">
         <p className="muted small">
-          For people working in Elvis itself. Filled in from PhotoTrack on every sync, and read once when a shot first
-          arrives with values but no record. Leave a box empty to skip that field.
+          For people working in Elvis itself — these are the only things PhotoTrack would ever write to the photos.
+          Filled in on every sync, and read once when a shot first arrives. Leave a box empty to skip that field.
         </p>
         <div className="form-grid">
           {(Object.keys(MIRROR_LABELS) as Array<keyof ElvisMirrorMap>).map((key) => (
@@ -231,7 +290,7 @@ export function ElvisPanel({ onClose }: { onClose: () => void }) {
           </select>
           and a few seconds after each change
         </label>
-        {!canPush(config) && (
+        {config.sharedStore === 'field' && !canPush(config) && (
           <p className="notice">Nothing will be written back to Elvis until a record field or a plain field is set.</p>
         )}
         <div className="row-gap">

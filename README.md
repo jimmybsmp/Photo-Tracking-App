@@ -128,13 +128,23 @@ Desktop app only (a browser page can't log in to a DAM). Open it from the
    `ancestorPaths:"/Shoots/2026/Gala"`. Every matching asset becomes a shot:
    its preview, filename (→ shot number) and folder come with it, and new
    assets appear on each sync.
-3. **Shared PhotoTrack record** — *ask your Elvis administrator to create one
-   multi-line text custom field* (e.g. `cf_photoTrack`) that the sync account
-   can edit. PhotoTrack stores each shot's complete tracking state there —
-   both tracks, who/when for every stage, and the comment thread — which is
-   what lets sites merge each other's work exactly. Without it, only the plain
-   fields below are shared, and comments stay on each computer.
-4. **Plain fields** (optional) — for people looking at assets in Elvis itself:
+3. **Where the tracking is shared** — the photos are only ever read. The
+   shared state (both tracks, who/when for every stage, every comment) lives
+   in one of two places:
+   - **One shared file** (the default, nothing for an administrator to set
+     up). Make a folder in Elvis outside the shoot's photo folders, e.g.
+     `/PhotoTrack`, and give every site the same path, e.g.
+     `/PhotoTrack/Gala 2026.ptdelta`. The first sync creates the file; after
+     that each site downloads it, merges, and checks in a **new version of
+     the same file** only when it has something the file lacks. It shows up
+     in Elvis as one asset per shoot — the versions live in its history, not
+     in search results. It's an ordinary delta file, so File → Import changes
+     opens it on any machine, offline included.
+   - **A field on every photo** — a multi-line text custom field (e.g.
+     `cf_photoTrack`) an administrator creates, holding each shot's record.
+4. **Plain fields** (optional) — the only thing PhotoTrack would ever write
+   to the photos, and only if you fill them in. For people looking at assets
+   in Elvis itself:
    usage, spread/slide, retouchers, and a written status per property
    ("Waiting on QC"). After **Test connection** these boxes list the fields
    your assets actually have, with an example value each.
@@ -168,9 +178,13 @@ protocol tests against a strict mock server.
 
 ## Known gaps
 
-- **Not yet run against your Elvis server's record field.** The protocol, the
-  sync and two app instances coordinating were all tested against a mock
-  server; the first real run needs the record field created (see above).
+- **Not yet run against your Elvis server.** The protocol, the shared file,
+  the record field, and two app instances coordinating were all tested
+  against a strict mock server and over Electron's own network stack; the
+  first real run is the real test.
+- **Two sites checking in the shared file in the same second** — the later
+  version briefly lacks the earlier one's change; that site notices on its
+  next sync and checks it in again, so it arrives a minute late, never lost.
 - **Shots added by dropping photos aren't uploaded to Elvis.** Sync covers
   shots pulled from Elvis; a dropped photo links to an asset only if its shot
   number matches that asset's filename.
