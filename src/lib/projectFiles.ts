@@ -93,8 +93,10 @@ function packAssets(assets: TrackerDocument['assets']): {
     const reviewExt = EXT_FROM_MIME[review.mime] ?? 'bin';
     // JPEG and PNG are already compressed — deflating them again costs CPU
     // for no gain, so image entries are stored as-is (level 0).
-    files[`assets/${hash}.thumb.${thumbExt}`] = [thumb.bytes, { level: 0 }];
-    files[`assets/${hash}.review.${reviewExt}`] = [review.bytes, { level: 0 }];
+    // A picture can be thumbnail-only (one shared from another site before
+    // it reached Elvis) — then there is no review image to write.
+    if (thumb.bytes.length) files[`assets/${hash}.thumb.${thumbExt}`] = [thumb.bytes, { level: 0 }];
+    if (review.bytes.length) files[`assets/${hash}.review.${reviewExt}`] = [review.bytes, { level: 0 }];
     manifest[hash] = {
       hash: asset.hash,
       width: asset.width,
@@ -123,8 +125,8 @@ function unpackAssets(
       height: meta.height,
       fileName: meta.fileName,
       bytes: meta.bytes,
-      thumbUrl: thumbBytes ? bytesToDataUrl(thumbBytes, MIME_FROM_EXT[meta.thumbExt] ?? 'image/jpeg') : '',
-      reviewUrl: reviewBytes ? bytesToDataUrl(reviewBytes, MIME_FROM_EXT[meta.reviewExt] ?? 'image/jpeg') : '',
+      thumbUrl: thumbBytes?.length ? bytesToDataUrl(thumbBytes, MIME_FROM_EXT[meta.thumbExt] ?? 'image/jpeg') : '',
+      reviewUrl: reviewBytes?.length ? bytesToDataUrl(reviewBytes, MIME_FROM_EXT[meta.reviewExt] ?? 'image/jpeg') : '',
     };
   }
   return assets;

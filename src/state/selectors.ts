@@ -251,6 +251,10 @@ export function recentActivity(doc: TrackerDocument, limit = 25): ActivityEntry[
       } else if (/^(mag|pr)\.retoucher$/.test(path)) {
         const side = path.slice(0, path.indexOf('.')) as Side;
         text = `assigned ${row[side].retoucher || 'no one'} to retouch ${shot} (${side === 'mag' ? 'Mag' : 'PR'})`;
+      } else if (path === 'elvisAssetId') {
+        text = row.elvisAssetId ? `linked ${shot} to ${row.elvisName || 'its asset'} in Elvis` : `unlinked ${shot} from Elvis`;
+      } else if (path === 'imageHash' && stamp.d === 'elvis') {
+        text = `has a new version of ${shot}`;
       } else if (FIELD_LABELS[path]) {
         text = `changed the ${FIELD_LABELS[path]} of ${shot}`;
       } else continue;

@@ -1,4 +1,5 @@
 import { useSyncStore } from '@/lib/elvis/autoSync';
+import { useTrackerStore } from '@/state/useTrackerStore';
 import { timeAgo } from '@/lib/format';
 import { useNow } from '@/components/ui/hooks';
 
@@ -10,6 +11,7 @@ export function SyncChip({ onClick }: { onClick: () => void }) {
   const status = useSyncStore((s) => s.status);
   const lastSyncAt = useSyncStore((s) => s.lastSyncAt);
   const error = useSyncStore((s) => s.lastError?.error);
+  const shared = useTrackerStore((s) => Boolean(s.doc.elvisFile));
   useNow(20_000);
 
   let label: string;
@@ -21,10 +23,6 @@ export function SyncChip({ onClick }: { onClick: () => void }) {
       label = 'Connect Elvis';
       tone = 'off';
       break;
-    case 'not-linked':
-      label = 'Elvis: not linked';
-      tone = 'off';
-      break;
     case 'syncing':
       label = 'Syncing…';
       tone = 'busy';
@@ -34,8 +32,8 @@ export function SyncChip({ onClick }: { onClick: () => void }) {
       tone = 'bad';
       break;
     default:
-      label = lastSyncAt ? `Synced ${timeAgo(lastSyncAt)}` : 'Elvis connected';
-      tone = 'ok';
+      label = shared ? (lastSyncAt ? `Shared · synced ${timeAgo(lastSyncAt)}` : 'Shared') : 'Elvis · not shared';
+      tone = shared ? 'ok' : 'off';
   }
 
   return (

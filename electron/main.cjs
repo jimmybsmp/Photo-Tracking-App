@@ -21,7 +21,8 @@
  * past it without checking whether 10.13 support is still required.
  */
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, nativeTheme, safeStorage, screen } = require('electron');
+const fsSync = require('node:fs');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createElvisClient } = require('./elvisClient.cjs');
@@ -42,21 +43,58 @@ let quitting = false;
 
 const RECOVERY_FILE = () => path.join(app.getPath('userData'), 'recovery.phototrack');
 const ELVIS_CONFIG_FILE = () => path.join(app.getPath('userData'), 'elvis-config.json');
+const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
 
 /* ------------------------------------------------------------------ *
  * Window
  * ------------------------------------------------------------------ */
 
+/**
+ * Where the window opens: where it was last left, if that is still on a
+ * connected screen; otherwise as large as fits the screen it opens on (a
+ * laptop screen is smaller than the 1600×980 a desk display allows).
+ */
+function initialBounds() {
+  try {
+    const saved = JSON.parse(fsSync.readFileSync(WINDOW_STATE_FILE(), 'utf8'));
+    const onScreen = screen.getAllDisplays().some(({ workArea: a }) =>
+      saved.x >= a.x - 40 && saved.y >= a.y - 40 && saved.x + 200 <= a.x + a.width && saved.y + 100 <= a.y + a.height,
+    );
+    if (onScreen && saved.width >= 900 && saved.height >= 560) return saved;
+  } catch {
+    /* first launch, or an unreadable file: fall through */
+  }
+  const area = screen.getPrimaryDisplay().workAreaSize;
+  return { width: Math.min(1600, area.width), height: Math.min(980, area.height) };
+}
+
+function writeBounds() {
+  if (!mainWindow || mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+  try {
+    fsSync.writeFileSync(WINDOW_STATE_FILE(), JSON.stringify({ ...mainWindow.getNormalBounds(), maximized: mainWindow.isMaximized() }));
+  } catch {
+    /* not worth interrupting anything over */
+  }
+}
+
+// Moving or resizing fires dozens of events a second; write once it settles.
+let boundsTimer = null;
+function rememberBounds() {
+  if (boundsTimer) clearTimeout(boundsTimer);
+  boundsTimer = setTimeout(writeBounds, 600);
+}
+
 function createWindow() {
+  const bounds = initialBounds();
+  // The standard macOS title bar: the window moves by it, double-click
+  // zooms it, and the close/minimise/zoom buttons sit in their own strip
+  // instead of on top of the app's controls. The project name shows in it.
   mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 980,
-    minWidth: 1024,
-    minHeight: 640,
+    ...bounds,
+    minWidth: 900,
+    minHeight: 560,
     backgroundColor: '#101215',
     title: 'PhotoTrack',
-    titleBarStyle: isMac ? 'hiddenInset' : 'default',
-    trafficLightPosition: isMac ? { x: 14, y: 18 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -65,6 +103,10 @@ function createWindow() {
       spellcheck: false,
     },
   });
+  if (bounds.maximized) mainWindow.maximize();
+  mainWindow.on('resize', rememberBounds);
+  mainWindow.on('move', rememberBounds);
+  mainWindow.on('close', writeBounds);
 
   loadApp();
 
@@ -423,8 +465,9 @@ ipcMain.handle('elvis:setConfig', async (_event, config) => {
 const elvis = createElvisClient(electronTransport);
 
 ipcMain.handle('elvis:test', async (_event, config) => elvis.test(config));
-ipcMain.handle('elvis:search', async (_event, config) => elvis.search(config));
-ipcMain.handle('elvis:update', async (_event, config, assetId, metadata) => elvis.update(config, assetId, metadata));
+ipcMain.handle('elvis:lookup', async (_event, config, text) => elvis.lookup(config, text));
+ipcMain.handle('elvis:assetsById', async (_event, config, ids) => elvis.assetsById(config, ids));
+ipcMain.handle('elvis:listFiles', async (_event, config, folder) => elvis.listFiles(config, folder));
 ipcMain.handle('elvis:fetchImage', async (_event, config, url) => elvis.fetchImage(config, url));
 ipcMain.handle('elvis:findFile', async (_event, config, assetPath) => elvis.findFile(config, assetPath));
 ipcMain.handle('elvis:download', async (_event, config, url) => elvis.download(config, url));

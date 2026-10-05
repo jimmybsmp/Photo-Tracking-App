@@ -76,6 +76,8 @@ interface TrackerStore extends UiState {
   applyMergedDoc: (doc: TrackerDocument) => void;
 
   setHeader: (patch: Partial<TrackerDocument['header']>) => void;
+  /** Share this project through a file in Elvis (a path), or stop ('' ). */
+  setElvisFile: (path: string) => void;
 
   addRow: () => string;
   addRowsFromAssets: (assets: AssetMeta[]) => string[];
@@ -190,6 +192,11 @@ export const useTrackerStore = create<TrackerStore>((set, get) => {
         revision: s.revision + 1,
         lastEdit: { key: `header:${Object.keys(patch).join(',')}`, at: Date.now() },
       })),
+
+    setElvisFile: (path) =>
+      set((s) =>
+        s.doc.elvisFile === path ? s : { doc: { ...s.doc, elvisFile: path }, revision: s.revision + 1, lastEdit: uniqueEdit() },
+      ),
 
     addRow: () => {
       const row = makeRow();

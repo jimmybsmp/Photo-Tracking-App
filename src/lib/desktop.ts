@@ -19,9 +19,9 @@ import type {
   ElvisConfig,
   ElvisFileResult,
   ElvisFindResult,
+  ElvisIdsResult,
   ElvisImageResult,
-  ElvisRequestResult,
-  ElvisSearchResult,
+  ElvisLookupResult,
   ElvisTestResult,
   ElvisUpload,
   ElvisUploadResult,
@@ -83,11 +83,14 @@ export interface DesktopBridge {
   elvisSetConfig(config: ElvisConfig): Promise<{ ok: boolean }>;
   /** Address → log in → one-hit search, reporting each step. */
   elvisTest(config: ElvisConfig): Promise<ElvisTestResult>;
-  /** Every matching asset, paged. */
-  elvisSearch(config: ElvisConfig): Promise<ElvisSearchResult>;
+  /** The asset a shot should link to, from a pasted id, link, or file name. */
+  elvisLookup(config: ElvisConfig, text: string): Promise<ElvisLookupResult>;
+  /** The linked assets, by id; ids not found come back in `missing`. */
+  elvisAssetsById(config: ElvisConfig, ids: string[]): Promise<ElvisIdsResult>;
+  /** The shared tracking files in a folder. */
+  elvisListFiles(config: ElvisConfig, folder: string): Promise<ElvisFindResult>;
   /** A preview/thumbnail from the configured server only. */
   elvisFetchImage(config: ElvisConfig, url: string): Promise<ElvisImageResult>;
-  elvisUpdate(config: ElvisConfig, assetId: string, metadata: Record<string, unknown>): Promise<ElvisRequestResult>;
   /** Every asset at exactly this path — the shared tracking file. */
   elvisFindFile(config: ElvisConfig, assetPath: string): Promise<ElvisFindResult>;
   /** Any file, from the configured server only. */

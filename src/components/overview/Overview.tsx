@@ -168,13 +168,13 @@ export function Overview({ onImport }: { onImport: () => void }) {
 function SyncLine() {
   const status = useSyncStore((s) => s.status);
   const lastSyncAt = useSyncStore((s) => s.lastSyncAt);
-  const assetCount = useSyncStore((s) => s.assetCount);
+  const shared = useTrackerStore((s) => Boolean(s.doc.elvisFile));
   const header = useTrackerStore((s) => s.doc.header);
   const setHeader = useTrackerStore((s) => s.setHeader);
   useNow(20_000);
   const syncText =
     status === 'idle' && lastSyncAt
-      ? `Up to date with Elvis · synced ${timeAgo(lastSyncAt)} · ${assetCount} assets`
+      ? `${shared ? 'Shared through Elvis' : 'Elvis pictures current'} · synced ${timeAgo(lastSyncAt)}`
       : status === 'syncing'
         ? 'Syncing with Elvis…'
         : status === 'error'

@@ -11,7 +11,7 @@ import { startMockElvis, USER, PASSWORD } from './mock-elvis-server.mjs';
 import { nodeTransport } from './node-transport.mjs';
 
 const require = createRequire(import.meta.url);
-const { createElvisClient, resolveBase } = require('../electron/elvisClient.cjs');
+const { createElvisClient, resolveBase, parseAssetRef } = require('../electron/elvisClient.cjs');
 
 let failures = 0;
 const check = (label, cond, extra) => {
@@ -22,14 +22,11 @@ const check = (label, cond, extra) => {
 const config = (origin, overrides = {}) => ({
   endpoint: origin, // browser-style address, no /services — the client must add it
   searchPath: '/search',
-  updatePath: '/update',
   searchMethod: 'POST',
-  query: '*',
   authMode: 'login',
   apiKey: '',
   username: USER,
   password: PASSWORD,
-  fieldMap: {},
   ...overrides,
 });
 
@@ -48,20 +45,10 @@ for (const dialect of ['token', 'cookie']) {
 
   const test = await client.test(cfg);
   check('connection test passes all three steps', test.ok && test.steps.every((s) => s.ok), test.steps);
-  check('test reports total hits', test.totalHits === 2, test.totalHits);
 
   const found = await client.search(cfg);
   check('search returns hits', found.ok && found.hits.length === 2, found);
-  check('hit metadata is mapped', found.hits?.[0]?.metadata?.cf_spreadNum === '12' && found.hits?.[0]?.name === 'IMG_4821.CR3');
-  const loginsAfterSearch = server.state.logins;
-  check('session reused, not re-logged-in per call', loginsAfterSearch === 1, loginsAfterSearch);
-
-  const upd = await client.update(cfg, 'A1', { cf_retouched: true, cf_spreadNum: '14' });
-  check('update via /update succeeds', upd.ok, upd);
-  check('update sent id + JSON-string metadata', server.state.updates[0]?.target === 'A1' && server.state.updates[0]?.metadata.cf_spreadNum === '14', server.state.updates[0]);
-
-  const bulk = await client.update({ ...cfg, updatePath: '/updatebulk' }, 'A2', { cf_qcOk: true });
-  check('legacy /updatebulk config still works (q=id:…)', bulk.ok && server.state.updates[1]?.target === 'id:A2', server.state.updates[1]);
+  check('session reused, not re-logged-in per call', server.state.logins === 1, server.state.logins);
 
   server.expireSession();
   const afterExpiry = await client.search(cfg);
@@ -75,24 +62,52 @@ for (const dialect of ['token', 'cookie']) {
   await server.close();
 }
 
-console.log('\npaging, images, field discovery');
+console.log('\npasted references');
+{
+  const id = 'EkRoPu4tqE0BOpbTQe1IH1';
+  check('a bare id', parseAssetRef(id).id === id);
+  check('an Elvis web link', parseAssetRef(`https://dam.example.com/app/#/search//?assetId=${id}`).id === id);
+  check('a file link', parseAssetRef(`https://dam.example.com/file/${id}/*/IMG_1.tif?_=3`).id === id);
+  check('a link without an id is recognised as such', parseAssetRef('https://dam.example.com/app/').kind === 'bad-link');
+  check('a file name', parseAssetRef('IMG_4821.tif').kind === 'name');
+}
+
+console.log('\nlinking shots to assets, previews, paging');
 {
   const server = await startMockElvis({ assetCount: 450, pageCap: 200 });
   const client = createElvisClient(nodeTransport());
   const cfg = config(server.origin);
   const all = await client.search(cfg);
-  check('a 450-asset query is read in full across pages', all.ok && all.hits.length === 450 && new Set(all.hits.map((h) => h.id)).size === 450, all.hits?.length);
-  check('hits carry preview urls', /preview\/A1/.test(all.hits?.[0]?.previewUrl || ''));
-  const img = await client.fetchImage(cfg, all.hits[0].previewUrl);
-  check('preview downloads as image bytes', img.ok && img.mime === 'image/jpeg' && img.bytes[0] === 0xff && img.bytes[1] === 0xd8, img);
+  check('a 450-asset search is read in full across pages', all.ok && all.hits.length === 450 && new Set(all.hits.map((h) => h.id)).size === 450, all.hits?.length);
+
+  const byId = await client.lookup(cfg, 'A7');
+  check('lookup by id finds exactly that asset', byId.ok && byId.by === 'id' && byId.hits.length === 1 && byId.hits[0].id === 'A7', byId);
+  const byLink = await client.lookup(cfg, `${server.origin}/app/#/search//?assetId=A42`);
+  check('lookup by a pasted link finds it', byLink.ok && byLink.hits[0]?.id === 'A42', byLink);
+  const byShot = await client.lookup(cfg, 'IMG_4821');
+  check('lookup by shot number finds the retouched file', byShot.ok && byShot.by === 'name' && byShot.hits[0]?.name === 'IMG_4821.tif', byShot);
+  const byName = await client.lookup(cfg, 'img_4822.TIF');
+  check('…and by its full file name, any case', byName.ok && byName.hits.length === 1 && byName.hits[0].id === 'A2', byName);
+  const unknownLink = await client.lookup(cfg, `${server.origin}/file/ZZZZZZZZ/*/x.tif`);
+  check('a link to an asset that isn’t there says so', !unknownLink.ok && /No asset/.test(unknownLink.error), unknownLink);
+  const nothing = await client.lookup(cfg, 'NOPE_9999');
+  check('no match is an empty list, not an error', nothing.ok && nothing.hits.length === 0, nothing);
+
+  const ids = Array.from({ length: 120 }, (_, i) => `A${i + 1}`).concat(['GONE1']);
+  const linked = await client.assetsById(cfg, ids);
+  check('linked assets are fetched by id in batches', linked.ok && linked.hits.length === 120, linked.hits?.length);
+  check('…and an id Elvis no longer has is reported missing', linked.missing?.join() === 'GONE1', linked.missing);
+  check('only the linked ids were asked for — the rest of Elvis is ignored', linked.hits.every((h) => ids.includes(h.id)));
+
+  const p1 = await client.fetchImage(cfg, byId.hits[0].previewUrl);
+  check('preview downloads as image bytes', p1.ok && p1.mime === 'image/jpeg' && p1.bytes[0] === 0xff && p1.bytes[1] === 0xd8, p1);
+  server.newVersion('A7');
+  const again = await client.assetsById(cfg, ['A7']);
+  const p2 = await client.fetchImage(cfg, again.hits[0].previewUrl);
+  check('a new version in Elvis shows in its version number and preview', again.hits[0].metadata.versionNumber === 2 && !Buffer.from(p1.bytes).equals(Buffer.from(p2.bytes)));
   const foreign = await client.fetchImage(cfg, 'https://elsewhere.example/steal.jpg');
   check('refuses to send the login to another host', !foreign.ok && /Refusing/.test(foreign.error), foreign);
-  const test = await client.test(cfg);
-  const names = (test.sampleFields || []).map((f) => f.name);
-  check('connection test lists the fields assets really have', names.includes('filename') && names.includes('cf_spreadNum'), names);
-  await client.update(cfg, 'A1', { cf_photoTrack: '{"x":1}' });
-  const after = await client.search(cfg, { num: 1 });
-  check('a write is visible on the next search', after.hits?.[0]?.metadata?.cf_photoTrack === '{"x":1}', after.hits?.[0]?.metadata);
+  check('nothing was written to any photo', server.state.updates.length === 0 && server.state.uploads.length === 0);
   await server.close();
 }
 
@@ -109,6 +124,10 @@ for (const dialect of ['token', 'cookie']) {
   const v1 = new Uint8Array([0x50, 0x4b, 0, 1, 2, 3, 255, 13, 10]);
   const created = await client.upload(cfg, { assetPath: path, bytes: v1 });
   check(`${dialect}: file created at the path (multipart, Filedata)`, created.ok && !!created.id, created);
+
+  await client.upload(cfg, { assetPath: '/PhotoTrack/Gala "Night" 2026.photos.ptdelta', bytes: v1 });
+  const listed = await client.listFiles(cfg, '/PhotoTrack/');
+  check(`${dialect}: the folder lists the shared file, not its photos companion`, listed.ok && listed.hits.length === 1 && listed.hits[0].name === 'Gala "Night" 2026.ptdelta', listed.hits);
 
   const found = await client.findFile(cfg, path);
   check(`${dialect}: found again by its exact path`, found.ok && found.hits.length === 1 && found.hits[0].id === created.id, found);

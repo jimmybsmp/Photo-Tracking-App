@@ -16,19 +16,25 @@
  * every later call then needs that cookie plus an `X-CSRF-TOKEN` header.
  * Both shapes are handled — the transport keeps cookies, this keeps tokens.
  *
- * Writes are form parameters, not a JSON body: `update` takes `id` and
- * `metadata` (a JSON-encoded string); `updatebulk` takes a query `q` in place
- * of `id`. A login also consumes one of the server's API licences, so the
- * session is cached and reused rather than logging in per request.
+ * A login consumes one of the server's API licences, so the session is
+ * cached and reused rather than logging in per request.
  *
- * Files go up as multipart: `create` takes `Filedata` plus the `assetPath`
- * to put it at; `update` with `Filedata` checks the file in as a new version
- * of the same asset, so a shared file keeps one id however often it changes.
+ * What PhotoTrack does in Elvis, and nothing more: it reads the assets a
+ * retoucher has linked shots to (by id), downloads their previews, and keeps
+ * one shared tracking file per shoot. Files go up as multipart: `create`
+ * takes `Filedata` plus the `assetPath` to put it at; `update` with
+ * `Filedata` checks the file in as a new version of the same asset, so the
+ * shared file keeps one id however often it changes. It never writes to a
+ * photo.
  */
 
 const DEFAULT_TIMEOUT_NOTE = 'no response within 20 seconds';
 const PAGE_SIZE = 200;
-const SAMPLE_SIZE = 10;
+/** Ids per search when refreshing linked assets — keeps each query short. */
+const ID_BATCH = 50;
+/** Candidates shown when looking an asset up by name. */
+const LOOKUP_LIMIT = 20;
+const ASSET_ID = /^[A-Za-z0-9_-]{2,}$/;
 /** Upper bound on one pull — far beyond one shoot, short of runaway. */
 const MAX_ASSETS = 10000;
 
@@ -79,6 +85,25 @@ function multipartBody(fields, file) {
 
 /** Quote a value for an Elvis (Lucene) query: only `"` and `\` need escaping inside quotes. */
 const quoteQuery = (value) => `"${String(value).replace(/(["\\])/g, '\\$1')}"`;
+/** Escape a bare (unquoted) term, so a prefix search can end in `*`. */
+const escapeTerm = (value) => String(value).replace(/([+\-!(){}[\]^"~*?:\\/&|])/g, '\\$1');
+
+/**
+ * What someone pasted to point a shot at an Elvis asset: the asset id, a
+ * link copied from Elvis (which carries the id), or a file name.
+ */
+function parseAssetRef(text) {
+  const t = String(text || '').trim();
+  if (!t) return { kind: 'empty' };
+  if (/^[a-z]+:\/\//i.test(t) || t.startsWith('/') || t.includes('#/')) {
+    const m =
+      /[?&#](?:assetId|assetid|id)=([A-Za-z0-9_-]{2,})/.exec(t) ||
+      /\/(?:file|preview|thumbnail|asset|assets)\/([A-Za-z0-9_-]{2,})(?:[/?#]|$)/.exec(t);
+    return m ? { kind: 'id', id: m[1], fromLink: true } : { kind: 'bad-link' };
+  }
+  if (ASSET_ID.test(t)) return { kind: 'id-or-name', id: t, name: t };
+  return { kind: 'name', name: t };
+}
 
 function parseJson(text) {
   if (!text) return null;
@@ -305,7 +330,7 @@ function createElvisClient(transport) {
     const method = config.searchMethod === 'GET' ? 'GET' : 'POST';
     const result = await authed('search', resolved.base, config, config.searchPath || '/search', {
       method,
-      params: { q: q || config.query || '*', start, num, metadataToReturn: 'all' },
+      params: { q: q || '*', start, num, metadataToReturn: 'all' },
     });
     if (!result.ok) return result;
     const hits = normalizeHits(result.body);
@@ -415,16 +440,64 @@ function createElvisClient(transport) {
     return { ok: true, url: result.url, status: result.status, id: String(body.id ?? id ?? '') };
   }
 
-  async function update(config, assetId, metadata) {
-    const resolved = resolveBase(config.endpoint);
-    if (!resolved.ok) return { ok: false, stage: 'address', error: resolved.error };
-    const path = config.updatePath || '/update';
-    const params = /updatebulk\/?$/.test(path)
-      ? { q: `id:${assetId}`, metadata: JSON.stringify(metadata) }
-      : { id: assetId, metadata: JSON.stringify(metadata) };
-    const result = await authed('update', resolved.base, config, path, { method: 'POST', params });
-    if (!result.ok) return result;
-    return { ok: true, url: result.url, status: result.status };
+  /**
+   * Find the asset a shot should link to, from whatever was pasted: an id or
+   * an Elvis link resolves to that one asset; a file name (or the start of
+   * one — the shot number) lists the candidates, newest first, each with its
+   * folder so the right one is obvious.
+   */
+  async function lookup(config, text) {
+    const ref = parseAssetRef(text);
+    if (ref.kind === 'empty') return { ok: false, stage: 'lookup', error: 'Paste the Elvis asset id or link, or type the file name.' };
+    if (ref.kind === 'bad-link') {
+      return { ok: false, stage: 'lookup', error: 'That link has no asset id in it. Copy the link from the asset itself in Elvis, or paste its id.' };
+    }
+    if (ref.id) {
+      const byId = await search(config, { q: `id:${quoteQuery(ref.id)}`, num: 1 });
+      if (!byId.ok) return byId;
+      if (byId.hits.length) return { ok: true, hits: byId.hits, by: 'id' };
+      if (ref.kind === 'id') return { ok: false, stage: 'lookup', error: `No asset with the id ${ref.id} — or this account can't see it.` };
+    }
+    const name = ref.name.trim();
+    const clauses = [`name:${quoteQuery(name)}`, `filename:${quoteQuery(name)}`];
+    if (!/\s/.test(name)) clauses.push(`name:${escapeTerm(name)}*`);
+    const found = await search(config, { q: clauses.join(' OR '), num: LOOKUP_LIMIT });
+    if (!found.ok) return found;
+    const exact = name.toLowerCase();
+    const modified = (hit) => Number(new Date(hit.metadata?.assetModified ?? hit.metadata?.fileModified ?? 0)) || 0;
+    const hits = found.hits
+      .filter((hit) => !/\.(ptdelta|phototrack)$/i.test(String(hit.name || '')))
+      .sort((a, b) => Number(String(b.name).toLowerCase() === exact) - Number(String(a.name).toLowerCase() === exact) || modified(b) - modified(a));
+    return { ok: true, hits, by: 'name', more: found.totalHits > found.hits.length };
+  }
+
+  /**
+   * The linked assets, by id — what a sync checks for new versions. Ids no
+   * longer found (deleted, moved out of reach) come back in `missing`.
+   */
+  async function assetsById(config, ids) {
+    const unique = [...new Set((ids || []).filter((id) => typeof id === 'string' && id))];
+    const hits = [];
+    for (let i = 0; i < unique.length; i += ID_BATCH) {
+      const batch = unique.slice(i, i + ID_BATCH);
+      const found = await search(config, { q: batch.map((id) => `id:${quoteQuery(id)}`).join(' OR '), num: batch.length });
+      if (!found.ok) return found;
+      hits.push(...found.hits);
+    }
+    const seen = new Set(hits.map((h) => h.id));
+    return { ok: true, hits, missing: unique.filter((id) => !seen.has(id)) };
+  }
+
+  /** The shared tracking files in a folder, for joining a project someone else started. */
+  async function listFiles(config, folder) {
+    const f = String(folder || '').trim().replace(/\/+$/, '');
+    if (!f.startsWith('/')) return { ok: false, stage: 'file', error: 'Enter a folder path, like /PhotoTrack' };
+    const found = await search(config, { q: `folderPath:${quoteQuery(f)}`, limit: 2000 });
+    if (!found.ok) return found;
+    const hits = found.hits
+      .filter((hit) => /\.ptdelta$/i.test(String(hit.name || '')) && !/\.photos\.ptdelta$/i.test(String(hit.name || '')))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return { ok: true, hits };
   }
 
   /**
@@ -452,42 +525,20 @@ function createElvisClient(transport) {
       steps.push({ ok: true, label: 'Log in', detail: config.authMode === 'none' ? 'Skipped — no authentication selected' : `Using ${config.authMode} credentials` });
     }
 
-    const found = await search(config, { num: SAMPLE_SIZE });
+    const found = await search(config, { num: 1 });
     if (!found.ok) {
       steps.push({ ok: false, label: 'Search', detail: found.error, hint: found.hint, url: found.url });
       return { ok: false, steps };
     }
-    steps.push({
-      ok: true,
-      label: 'Search',
-      detail: `Query "${config.query || '*'}" matches ${found.totalHits} asset${found.totalHits === 1 ? '' : 's'}`,
-    });
-    return { ok: true, steps, totalHits: found.totalHits, sampleFields: sampleFields(found.hits) };
-  }
-
-  /**
-   * The metadata fields actually present on a few matching assets, with an
-   * example value each — so mapping is picking from what the server really
-   * has, instead of guessing at names.
-   */
-  function sampleFields(hits) {
-    const seen = new Map();
-    for (const hit of hits) {
-      for (const [name, value] of Object.entries(hit.metadata || {})) {
-        if (seen.has(name) || value === null || value === undefined || value === '') continue;
-        let sample = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        if (sample.length > 60) sample = `${sample.slice(0, 57)}…`;
-        seen.set(name, sample);
-      }
-    }
-    return [...seen].map(([name, sample]) => ({ name, sample })).sort((a, b) => a.name.localeCompare(b.name));
+    steps.push({ ok: true, label: 'Search', detail: 'This account can search Elvis' });
+    return { ok: true, steps };
   }
 
   function forget() {
     sessions.clear();
   }
 
-  return { test, search, update, fetchImage, download, findFile, upload, forget };
+  return { test, search, lookup, assetsById, listFiles, fetchImage, download, findFile, upload, forget };
 }
 
-module.exports = { createElvisClient, resolveBase };
+module.exports = { createElvisClient, resolveBase, parseAssetRef };

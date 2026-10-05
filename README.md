@@ -31,16 +31,26 @@ someone on the team replies and resolves them.
 
 ## The workflow
 
-1. **Bring in the shoot** — pull it from WoodWing Elvis (photos, filenames and
-   folders come with it), or drop photos anywhere on the Shots tab.
+It starts offline and moves onto Elvis one shot at a time:
+
+1. **Select** — someone goes through the raw folder, picks a frame, makes a
+   JPEG of it and drops it on the Shots tab. That shot is now tracked. Nothing
+   needs Elvis yet.
 2. **Set where each shot runs** — Magazine, Press release, or Both — and its
    shot type. A longshot skips assembly, submission and approval; those three
    stages are hidden for it and left out of every count.
-3. **Work the tracks** — check stages off in the shot's panel or on the sheet;
+3. **Share the project** (once per shoot) — every site works from one shared
+   file in Elvis; see below. Each site sees the same shots, stages, comments
+   and the selector's photos.
+4. **Link to Elvis** — when the retoucher's first pass is in Elvis, they open
+   the shot and, under **Elvis**, paste the asset's id or link (or press
+   Find: the box starts with the shot number). From then on the shot's
+   picture is that asset's preview, and every new version checked in to Elvis
+   shows up at every site on the next sync. All the other frames in that Elvis
+   folder — the layout tests, the rejects — are ignored.
+5. **Work the tracks** — check stages off in the shot's panel or on the sheet;
    assign retoucher per property.
-4. **Discuss on the shot** — concerns and notes, replies, resolve.
-5. **Stay in step** — Elvis sync keeps every site current automatically; delta
-   files do the same by hand where there's no network.
+6. **Discuss on the shot** — concerns and notes, replies, resolve.
 
 ## The two builds
 
@@ -115,49 +125,45 @@ What this doesn't do: merge two *simultaneous* edits to the exact same field
 (newest wins, tie-broken by machine), and the shoot's header merges as one
 block.
 
-## WoodWing Elvis sync
+## WoodWing Elvis
 
-Desktop app only (a browser page can't log in to a DAM). Open it from the
-**Connect Elvis** chip in the top bar:
+Desktop app only (a browser page can't sign in to a DAM). Open it from the
+chip at the top right. PhotoTrack does exactly two things in Elvis, and never
+changes a photo there:
 
-1. **Connect** — the server address you use in a browser, and the username and
-   password PhotoTrack should sign in with. **Test connection** walks address →
-   log in → search and, if a step fails, says which, the URL tried, and what
-   that error usually means.
-2. **Which assets** — an Elvis query, usually the shoot's folder, e.g.
-   `ancestorPaths:"/Shoots/2026/Gala"`. Every matching asset becomes a shot:
-   its preview, filename (→ shot number) and folder come with it, and new
-   assets appear on each sync.
-3. **Where the tracking is shared** — the photos are only ever read. The
-   shared state (both tracks, who/when for every stage, every comment) lives
-   in one of two places:
-   - **One shared file** (the default, nothing for an administrator to set
-     up). Make a folder in Elvis outside the shoot's photo folders, e.g.
-     `/PhotoTrack`, and give every site the same path, e.g.
-     `/PhotoTrack/Gala 2026.ptdelta`. The first sync creates the file; after
-     that each site downloads it, merges, and checks in a **new version of
-     the same file** only when it has something the file lacks. It shows up
-     in Elvis as one asset per shoot — the versions live in its history, not
-     in search results. It's an ordinary delta file, so File → Import changes
-     opens it on any machine, offline included.
-   - **A field on every photo** — a multi-line text custom field (e.g.
-     `cf_photoTrack`) an administrator creates, holding each shot's record.
-4. **Plain fields** (optional) — the only thing PhotoTrack would ever write
-   to the photos, and only if you fill them in. For people looking at assets
-   in Elvis itself:
-   usage, spread/slide, retouchers, and a written status per property
-   ("Waiting on QC"). After **Test connection** these boxes list the fields
-   your assets actually have, with an example value each.
-5. **Sync** — **Pull this shoot** links the open project to the query. From
-   then on it syncs every minute (adjustable) and a few seconds after each
-   change; the top-bar chip always shows when it last synced. If the network
-   drops, nothing is lost — changes stay here and go out on the next sync.
+**1. One shared file per shoot.** Make a folder for PhotoTrack in Elvis,
+outside the photo folders — e.g. `/PhotoTrack`. One site presses **Share**
+with a name like `/PhotoTrack/Gala 2026.ptdelta`; every other site presses
+**Show shared projects** and **Join**. Two items appear in that folder per
+shoot:
 
-Each login takes one of the server's API licences, so the session is reused.
+- `Gala 2026.ptdelta` — every shot's status, who did what and when, every
+  comment. A few kilobytes per shot. A site checks in a new version only when
+  it has something the file lacks, so idle sites never write; each change is
+  a new *version* of the same file, kept in its history, not a new file.
+- `Gala 2026.photos.ptdelta` — thumbnails of shots not in Elvis yet, so other
+  sites can see what the selector picked. It only changes when photos are
+  dropped in. Once a shot is linked, its picture comes from Elvis instead.
+
+Both are ordinary delta files: File → Import changes opens them on any
+machine, offline included.
+
+**2. Shots linked by hand.** A linked shot follows its asset's preview. Each
+sync asks Elvis — by id, for the linked assets only — whether a new version
+was checked in, and fetches the new preview if so. A linked asset that's
+deleted in Elvis is flagged on the shot; its last picture stays.
+
+Sync runs every minute (adjustable), a few seconds after each change, and on
+**Sync now**. If the network drops, nothing is lost — changes stay here and go
+out on the next sync. Two sites checking in at the same second: the later
+version briefly lacks the earlier one's change, and that site checks it in
+again on its next sync.
+
 Credentials are stored only in the desktop app's own encrypted config — never
-in a project file, a delta, or the Elvis record. Requests go through macOS's
+in a project file, a delta, or the shared file. Requests go through macOS's
 own network stack, so a company HTTPS certificate works once its root is
-trusted in Keychain Access, and the system proxy is honoured.
+trusted in Keychain Access, and the system proxy is honoured. Each login takes
+one of the server's API licences, so the session is reused.
 
 ## Keyboard shortcuts
 
@@ -178,16 +184,12 @@ protocol tests against a strict mock server.
 
 ## Known gaps
 
-- **Not yet run against your Elvis server.** The protocol, the shared file,
-  the record field, and two app instances coordinating were all tested
-  against a strict mock server and over Electron's own network stack; the
-  first real run is the real test.
-- **Two sites checking in the shared file in the same second** — the later
-  version briefly lacks the earlier one's change; that site notices on its
-  next sync and checks it in again, so it arrives a minute late, never lost.
-- **Shots added by dropping photos aren't uploaded to Elvis.** Sync covers
-  shots pulled from Elvis; a dropped photo links to an asset only if its shot
-  number matches that asset's filename.
+- **Not yet run against your Elvis server.** Linking, previews, the shared
+  file and two app instances coordinating were tested against a strict mock
+  server and over Electron's own network stack; the first real run is the
+  real test.
+- **Dropped photos aren't uploaded to Elvis.** The retoucher puts the file in
+  Elvis; PhotoTrack only links to it.
 - **Comments can't be edited or deleted** once posted — that's what keeps
   merging threads between sites simple and safe. Resolve instead.
 - **Per-field newest-wins, not a full CRDT.** Two people changing the same

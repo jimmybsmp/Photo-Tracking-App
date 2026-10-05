@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { matchesFilters } from '@/state/selectors';
@@ -23,6 +23,10 @@ export function ContactSheet() {
   const { importFiles, importInto, progress } = useFileImport();
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Stable, so a memoised tile re-renders only when its own shot changes —
+  // a fresh arrow here made every edit redraw every tile on the sheet.
+  const dropInto = useCallback((rowId: string, files: FileList) => void importInto(rowId, files[0]), [importInto]);
 
   const visible = useMemo(() => rowIds.filter((id) => rows[id] && matchesFilters(rows[id], filters)), [rowIds, rows, filters]);
 
@@ -89,7 +93,7 @@ export function ContactSheet() {
         ) : (
           <div className="grid" onClick={(e) => e.target === e.currentTarget && clearSelection()}>
             {visible.map((id) => (
-              <PhotoTile key={id} rowId={id} onDropFiles={(rowId, files) => void importInto(rowId, files[0])} />
+              <PhotoTile key={id} rowId={id} onDropFiles={dropInto} />
             ))}
           </div>
         )}

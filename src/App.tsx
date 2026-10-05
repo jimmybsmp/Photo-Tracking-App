@@ -63,6 +63,12 @@ export default function App() {
     if (revision > 0) autosave(useTrackerStore.getState().doc);
   }, [revision]);
 
+  // The window title: the shoot's name, as the macOS title bar shows it.
+  const event = useTrackerStore((s) => s.doc.header.event);
+  useEffect(() => {
+    document.title = `${event || 'Untitled shoot'} — PhotoTrack`;
+  }, [event]);
+
   // Unsaved-changes warning on close. The desktop app shows a native one.
   useEffect(() => {
     const bridge = desktop();

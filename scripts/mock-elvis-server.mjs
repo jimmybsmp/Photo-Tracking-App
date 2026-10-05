@@ -14,8 +14,11 @@
  * Files: `create` and `update` with a file must be multipart with the file in
  * `Filedata`; `create` refuses a path that already holds an asset, and
  * `update` with a file checks in a new version (versionNumber + 1, same id).
- * `search` understands `folderPath:"…"`; any other query matches everything —
- * including the tracking file, which the sync must know to skip.
+ * `search` understands clauses joined by OR, each `field:"exact"` or
+ * `field:prefix*` on id, name, filename or folderPath; `*` matches
+ * everything. A preview's bytes change with the asset's version, the way a
+ * real preview does when a retoucher checks in a new file — `newVersion(id)`
+ * does that.
  */
 import http from 'node:http';
 
@@ -32,11 +35,43 @@ const PIXEL_JPEG = Buffer.from(
 function seedAssets(count) {
   const photo = (id, n, extra = {}) => ({
     id,
-    metadata: { filename: `IMG_${n}.CR3`, name: `IMG_${n}.CR3`, folderPath: '/Shoots/Gala', assetPath: `/Shoots/Gala/IMG_${n}.CR3`, ...extra },
+    metadata: {
+      filename: `IMG_${n}.tif`,
+      name: `IMG_${n}.tif`,
+      folderPath: '/Shoots/Gala',
+      assetPath: `/Shoots/Gala/IMG_${n}.tif`,
+      versionNumber: 1,
+      assetModified: Date.UTC(2026, 9, 1, 12, 0, 0),
+      ...extra,
+    },
   });
   const assets = [photo('A1', 4821, { cf_usagePlacement: 'mag', cf_spreadNum: '12' }), photo('A2', 4822, { cf_usagePlacement: 'both' })];
   for (let i = 3; i <= count; i++) assets.push(photo(`A${i}`, 4820 + i));
   return assets;
+}
+
+/** A tiny Lucene subset: OR-joined `field:"exact"` / `field:prefix*` clauses, or `*`. */
+function compileQuery(q) {
+  const query = String(q || '*').trim();
+  if (query === '*' || query === '') return () => true;
+  const clauses = [];
+  const re = /(\w+):(?:"((?:[^"\\]|\\.)*)"|((?:[^\s\\*]|\\.)+)\*)(?:\s+OR\s+|$)/gy;
+  let m;
+  while ((m = re.exec(query))) {
+    const unescape = (v) => v.replace(/\\(.)/g, '$1');
+    if (m[2] !== undefined) clauses.push({ field: m[1], exact: unescape(m[2]) });
+    else clauses.push({ field: m[1], prefix: unescape(m[3]) });
+    if (re.lastIndex >= query.length) break;
+  }
+  if (!clauses.length || re.lastIndex < query.length) throw new Error(`mock can't parse query: ${query}`);
+  return (asset) =>
+    clauses.some(({ field, exact, prefix }) => {
+      const value = field === 'id' ? asset.id : String(asset.metadata[field] ?? '');
+      const ci = field === 'name' || field === 'filename';
+      const a = ci ? value.toLowerCase() : value;
+      if (exact !== undefined) return a === (ci ? exact.toLowerCase() : exact);
+      return a.startsWith(ci ? prefix.toLowerCase() : prefix);
+    });
 }
 
 /** Split a multipart/form-data body into text fields and files. */
@@ -66,9 +101,10 @@ function parseMultipart(body, contentType) {
   return { fields, files };
 }
 
-export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 200 } = {}) {
+/** `preview(asset)` can supply real JPEG bytes for UI runs; the default is a 1×1 pixel. */
+export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 200, preview = () => PIXEL_JPEG } = {}) {
   const ASSETS = seedAssets(assetCount);
-  const state = { logins: 0, updates: [], uploads: [], log: [], expireNext: false, assets: ASSETS, imageFetches: 0, files: new Map(), nextId: 1 };
+  const state = { logins: 0, updates: [], uploads: [], queries: [], log: [], expireNext: false, assets: ASSETS, imageFetches: 0, files: new Map(), nextId: 1 };
   const TOKEN = 'tok-abc123';
   const CSRF = 'csrf-xyz789';
   const SESSION = 'JSESSIONID=sess-42';
@@ -127,8 +163,14 @@ export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 20
       if (endpoint === 'search') {
         const num = Math.min(Number(params.get('num') || 50), pageCap);
         const start = Number(params.get('start') || 0);
-        const folder = /^folderPath:"((?:[^"\\]|\\.)*)"$/.exec(params.get('q') || '');
-        const matching = folder ? ASSETS.filter((a) => a.metadata.folderPath === folder[1].replace(/\\(.)/g, '$1')) : ASSETS;
+        let test;
+        state.queries.push(params.get('q') || '');
+        try {
+          test = compileQuery(params.get('q'));
+        } catch (error) {
+          return send(res, 400, { errorcode: 400, message: String(error.message) });
+        }
+        const matching = ASSETS.filter(test);
         const hits = matching.slice(start, start + num).map((a) => ({
           ...a,
           thumbnailUrl: state.files.has(a.id) ? undefined : `/services/preview/${a.id}?size=thumb`,
@@ -169,8 +211,11 @@ export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 20
 
       if (endpoint.startsWith('preview/')) {
         state.imageFetches++;
+        const asset = ASSETS.find((a) => a.id === endpoint.split('/')[1]);
+        if (!asset) return send(res, 404, { errorcode: 404, message: 'No such asset' });
         res.writeHead(200, { 'Content-Type': 'image/jpeg' });
-        return res.end(PIXEL_JPEG);
+        // Same pixel, version-tagged: a new version's preview has new bytes.
+        return res.end(Buffer.concat([preview(asset), Buffer.from(`v${asset.metadata.versionNumber ?? 1}`)]));
       }
 
       if (endpoint === 'update' || endpoint === 'updatebulk') {
@@ -205,6 +250,14 @@ export function startMockElvis({ dialect = 'token', assetCount = 2, pageCap = 20
         origin: `http://127.0.0.1:${port}`,
         state,
         expireSession: () => (state.expireNext = true),
+        /** A retoucher checks in a new version of a photo in Elvis. */
+        newVersion: (id) => {
+          const asset = ASSETS.find((a) => a.id === id);
+          asset.metadata.versionNumber = (asset.metadata.versionNumber ?? 1) + 1;
+          asset.metadata.assetModified = Date.now();
+        },
+        /** Someone deletes an asset in Elvis. */
+        remove: (id) => ASSETS.splice(ASSETS.findIndex((a) => a.id === id), 1),
         close: () => new Promise((r) => server.close(r)),
       });
     });

@@ -75,9 +75,9 @@ npm run typecheck && npm run build && npm test
 ```
 
 `npm test` = `tests/logic.test.ts` (bundled by esbuild; migration, longshot
-rule, undo, comments, delta, three sites syncing through a simulated Elvis
-record field, and three sites sharing one tracking file through the real
-client and the mock server) plus the Elvis protocol tests against the mock.
+rule, undo, comments, delta, and the whole Elvis workflow — drop, share,
+join, link, new versions, races — through the real client and the mock
+server) plus the Elvis protocol tests against the mock.
 
 `npm run build` also asserts the output loads from `file://` — see
 `scripts/check-file-protocol.mjs` for the three ways it silently doesn't.
@@ -87,35 +87,34 @@ client and the mock server) plus the Elvis protocol tests against the mock.
 Elvis has no static API key: log in with username + password at
 `/services/login`, then send the returned `authToken` as a Bearer header
 (Elvis 6 / Assets) or keep the session cookie and send `X-CSRF-TOKEN`
-(Elvis 5). Writes are **form parameters** — `update` takes `id` plus
-`metadata` as a JSON *string*; `updatebulk` takes `q` instead of `id`. Keep
+(Elvis 5). Searches are form parameters; files go up as multipart
+(`create` with `assetPath`, or `update` with `id`, both with `Filedata`). Keep
 network calls on Electron's `net`, not Node's `https`: only `net` trusts the
 macOS Keychain and the system proxy, which a company-hosted DAM usually
 needs. `scripts/mock-elvis-server.mjs` is strict about all of this on purpose
 — if a change makes it fail, a real server would fail too. Image downloads go
 only to the configured server's origin: the request carries the login.
 
-Sync (`lib/elvis/sync.ts` and `lib/elvis/sharedFile.ts` rules,
-`lib/elvis/autoSync.ts` I/O) never writes to the photos unless plain mirror
-fields are mapped. The shared state lives in one of two places
-(`config.sharedStore`):
+PhotoTrack never scans Elvis and never writes to a photo. It does two things
+(`lib/elvis/sharedFile.ts` and `lib/elvis/link.ts` are the rules,
+`lib/elvis/autoSync.ts` the I/O):
 
-- **The shared file** (default): one `.ptdelta` per shoot at a path every
-  site enters identically. A cycle downloads every copy at that path, merges
-  with `mergeDelta`, and checks in a new version (`update` + `Filedata`) only
-  when `fileNeedsUpdate` says the file lacks something — so idle sites never
-  write and a lost race heals on the next cycle. Elvis-linked rows go in
-  without `imageHash` (each site gets the picture from the asset itself);
-  only dropped photos carry pixels. Never write over a file that doesn't
-  unpack as a delta, and never let the file become a shot
-  (`isTrackingFileHit`).
-- **The record field**: holds the shot's full state as canonical JSON —
-  fields, stamps, comments — and merges with `mergeRow`, the same merge delta
-  files use. Plain
-"mirror" fields are written for people in Elvis and read *only* when an asset
-has no record yet; they carry no stamps, so they must never override a record.
-Push writes only fields whose value differs from what the preceding pull saw.
-A project syncs only once `doc.elvisLinked` is set by an explicit pull.
+- **The shared file.** One `.ptdelta` per shoot at a path stored in the
+  project (`doc.elvisFile`). A cycle downloads every copy at that path,
+  merges with `mergeDelta`, and checks in a new version (`update` +
+  `Filedata`) only when `fileNeedsUpdate` says the file lacks something — so
+  idle sites never write and a lost race heals on the next cycle. It carries
+  no pixels: linked rows go in without `imageHash` (each site fetches the
+  preview itself); thumbnails of not-yet-linked shots go in the companion
+  `.photos.ptdelta`, which changes only when photos are added. Never write
+  over a file that doesn't unpack as a delta.
+- **Shots linked by hand.** The retoucher links a shot to an asset id
+  (`linkShot`); that's a stamped edit that travels in the shared file. Each
+  cycle asks Elvis for the linked ids only (`assetsById`) and fetches a
+  preview when its version differs from `doc.elvisPreviews` — local
+  bookkeeping, never shared. Elvis-sourced changes are stamped `u: 'Elvis'`.
+
+A project with no shared file and nothing linked makes no Elvis calls at all.
 
 ## Design
 
@@ -146,8 +145,12 @@ share all of `src/` and differ only in what the shell provides:
   `window.phototrack` directly from a component — always through `desktop()`.
 - **Elvis sync** only exists behind `isDesktop()`. It needs a main-process
   HTTP request (past CORS, and to keep the request off the renderer's
-  `file://` origin) — see `electron/main.cjs`'s `elvis:search`/`elvis:update`
-  handlers and `src/components/elvis/ElvisPanel.tsx`.
+  `file://` origin) — see the `elvis:*` handlers in `electron/main.cjs`.
+- **Window.** The desktop app uses the standard macOS title bar, so the
+  window moves and its buttons never sit over the app's own. Dialogs go
+  through `components/ui/Modal.tsx`, which closes only on a press *and*
+  release on the backdrop — a plain backdrop `onClick` closed the Elvis panel
+  whenever a click into a field ended a few pixels outside it.
 
 The project file format (`.phototrack`) and the delta format (`.ptdelta`) are
 identical in both builds, deliberately: work drafted on the offline machine

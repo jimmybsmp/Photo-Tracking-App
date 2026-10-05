@@ -17,9 +17,17 @@ import { newId } from '@/lib/compat';
  *     someone resolves them) and notes, with replies.
  *   - Shots pulled from Elvis get a row id derived from the asset id, so every
  *     site that pulls the same asset agrees on which row it is.
+ *
+ * Version 3: Elvis stops scanning folders. A project is shared through one
+ * tracking file whose path belongs to the project (`elvisFile`), and each
+ * shot is linked to its Elvis asset by hand, by the retoucher, once it's in
+ * Elvis. `elvisPreviews` remembers which version of each linked asset's
+ * preview this copy holds, so a new version in Elvis is fetched once.
+ * The v2 `elvisLinked` flag (a folder query linked to the project) has no
+ * meaning any more and is dropped.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /* ------------------------------------------------------------------ *
  * Pipeline
@@ -350,10 +358,24 @@ export interface TrackerDocument {
   deletedRowIds: Record<string, FieldStamp>;
   sheet: SheetConfig;
   /**
-   * This project has been pulled from Elvis, so automatic sync applies to it.
-   * Kept per project so opening an unrelated file never pulls a shoot into it.
+   * Path of the shared tracking file in Elvis this project syncs through,
+   * e.g. `/PhotoTrack/Gala 2026.ptdelta`; empty when not shared. Kept per
+   * project, so opening another shoot never syncs it into the wrong file.
    */
-  elvisLinked: boolean;
+  elvisFile: string;
+  /**
+   * For each linked Elvis asset, which version's preview this copy holds.
+   * Local bookkeeping: every site fetches previews from Elvis itself, so
+   * this never travels in a delta or the shared file.
+   */
+  elvisPreviews: Record<string, ElvisPreviewState>;
+}
+
+export interface ElvisPreviewState {
+  /** Elvis's own version marker for the asset (version number / file date). */
+  version: string;
+  /** The picture key the preview was imported under. */
+  hash: string;
 }
 
 export function emptyDocument(): TrackerDocument {
@@ -366,7 +388,8 @@ export function emptyDocument(): TrackerDocument {
     assets: {},
     deletedRowIds: {},
     sheet: { ...defaultSheetConfig },
-    elvisLinked: false,
+    elvisFile: '',
+    elvisPreviews: {},
   };
 }
 
@@ -416,7 +439,9 @@ export function migrate(raw: unknown): MigrationResult {
 /**
  * Fill in anything a native file is missing. v1 rows become v2 by gaining
  * the new fields (`comments`, `elvisName`, `elvisPath`) with empty values,
- * which `normalizeRow` supplies — no stored value changes meaning.
+ * which `normalizeRow` supplies — no stored value changes meaning. v2 → v3
+ * gains `elvisFile` (unshared) and `elvisPreviews` (empty: linked previews
+ * are fetched again on the first sync) and drops `elvisLinked`.
  */
 function hydrate(raw: Record<string, unknown>): TrackerDocument {
   const base = emptyDocument();
@@ -433,8 +458,19 @@ function hydrate(raw: Record<string, unknown>): TrackerDocument {
     assets: (raw.assets as TrackerDocument['assets']) ?? {},
     deletedRowIds: (raw.deletedRowIds as TrackerDocument['deletedRowIds']) ?? {},
     sheet: { ...defaultSheetConfig, ...((raw.sheet as Partial<SheetConfig>) ?? {}) },
-    elvisLinked: raw.elvisLinked === true,
+    elvisFile: typeof raw.elvisFile === 'string' ? raw.elvisFile : '',
+    elvisPreviews: normalizePreviews(raw.elvisPreviews),
   };
+}
+
+function normalizePreviews(raw: unknown): Record<string, ElvisPreviewState> {
+  const out: Record<string, ElvisPreviewState> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [assetId, v] of Object.entries(raw as Record<string, unknown>)) {
+    const p = v as Partial<ElvisPreviewState> | null;
+    if (p && typeof p.version === 'string' && typeof p.hash === 'string') out[assetId] = { version: p.version, hash: p.hash };
+  }
+  return out;
 }
 
 /* --- original HTML tool (no schemaVersion) → v1 ----------------------- */

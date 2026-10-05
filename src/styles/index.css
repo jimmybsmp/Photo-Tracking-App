@@ -268,9 +268,6 @@ textarea.field {
   letter-spacing: 0.05em;
   color: var(--chrome-300);
 }
-.field-sample {
-  margin-top: -1px;
-}
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -284,18 +281,6 @@ textarea.field {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-/* An option with a sentence of explanation: the control stays at the first line. */
-.choice-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 6px 0;
-  line-height: 1.4;
-}
-.choice-row input {
-  margin-top: 3px;
-  flex: none;
 }
 
 .segmented {
@@ -1709,6 +1694,134 @@ textarea.field {
 }
 .elvis-step-hint {
   color: #fcd34d;
+}
+.elvis-footnote {
+  border-top: 1px solid var(--chrome-700);
+  padding-top: 12px;
+}
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.share-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--chrome-900);
+  border: 1px solid var(--chrome-700);
+  min-width: 0;
+}
+.share-card h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.share-card .btn-primary {
+  align-self: flex-start;
+}
+.field-error {
+  color: #fca5a5;
+  margin: 0;
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.file-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--chrome-800);
+}
+.file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- a shot's Elvis link (inspector) ----------------------------------- */
+
+.linked,
+.finder {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.finder {
+  align-items: stretch;
+}
+.finder .row-gap {
+  flex-wrap: nowrap;
+}
+.finder .field {
+  flex: 1;
+  min-width: 0;
+}
+.linked-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.pill-elvis {
+  background: var(--accent-wash);
+  color: #93c5fd;
+}
+.candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.candidate {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--chrome-800);
+}
+.candidate-thumb {
+  width: 56px;
+  height: 42px;
+  border-radius: 4px;
+  background: var(--chrome-700);
+  overflow: hidden;
+}
+.candidate-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.candidate-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.candidate-meta strong,
+.candidate-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- toasts ---------------------------------------------------------------- */

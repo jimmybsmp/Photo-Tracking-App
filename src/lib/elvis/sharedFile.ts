@@ -1,10 +1,10 @@
 import { buildDelta, emptySummary, mergeDelta, summaryChanged, type DeltaFile, type MergeSummary } from '@/lib/delta';
+import { getDeviceId } from '@/lib/deviceId';
 import { emptyDocument, type AssetMeta, type ShotRow, type TrackerDocument } from '@/state/schema';
-import type { ElvisConfig, ElvisHit } from './types';
 
 /**
  * The shared tracking file — rules only, no network (`autoSync.ts` does the
- * I/O, the same split as `sync.ts`).
+ * I/O).
  *
  * One file in Elvis per shoot, e.g. /PhotoTrack/Gala 2026.ptdelta, in the
  * ordinary delta format: every shot, every stamp, every comment. A sync
@@ -19,15 +19,18 @@ import type { ElvisConfig, ElvisHit } from './types';
  * them in again. Every site keeps a full copy and merges by stamp, so the
  * file always converges.
  *
- * Pictures stay out of it. A shot that came from Elvis gets its picture
- * from its own asset at every site, so the file carries no image for it —
- * and no image reference either, which would otherwise point at a picture
- * another site hasn't downloaded yet. Only photos someone dropped in by
- * hand, which exist nowhere else, travel inside the file.
+ * Pictures are kept out of it, so the file that changes with every tick stays
+ * a few kilobytes per shot:
+ *   - A shot linked to Elvis gets its picture from its own asset at every
+ *     site, so neither the picture nor a reference to it travels.
+ *   - A shot not in Elvis yet — a JPEG the selector dropped in — has its
+ *     thumbnail in a companion file beside the main one
+ *     (…/Gala 2026.photos.ptdelta). That one only changes when new photos
+ *     are dropped in, never when a stage is ticked.
  */
 
 export const TRACKING_FOLDER = '/PhotoTrack';
-const TRACKING_FILE = /\.(ptdelta|phototrack)$/i;
+const TRACKING_EXT = /\.ptdelta$/i;
 
 /** A starting suggestion for the file's path, from the shoot's own name. */
 export function suggestTrackingPath(header: { event: string; name: string }): string {
@@ -42,44 +45,58 @@ export function trackingPathProblem(path: string): string | null {
   if (!p.startsWith('/')) return 'Start the path with a folder, e.g. /PhotoTrack/…';
   if (p.endsWith('/')) return 'End the path with a file name, e.g. …/Gala 2026.ptdelta';
   if (p.lastIndexOf('/') === 0) return 'Put the file in a folder of its own, e.g. /PhotoTrack/…';
-  if (!TRACKING_FILE.test(p)) return 'End the file name with .ptdelta';
+  if (!TRACKING_EXT.test(p)) return 'End the file name with .ptdelta';
+  if (/\.photos\.ptdelta$/i.test(p)) return 'That is the photos file that sits beside a shared file — choose the shared file itself';
   return null;
 }
 
-const metaText = (hit: ElvisHit, key: string) => {
-  const v = hit.metadata?.[key];
-  return typeof v === 'string' ? v : '';
-};
+/** The companion file holding thumbnails of shots not in Elvis yet. */
+export const photosPathFor = (path: string) => path.trim().replace(TRACKING_EXT, '.photos.ptdelta');
 
-/**
- * The tracking file — or any PhotoTrack file — showing up among the photos.
- * It happens whenever the photo query reaches the folder the file is in,
- * and it must never become a "shot".
- */
-export function isTrackingFileHit(hit: ElvisHit, config: Pick<ElvisConfig, 'trackingFile'>): boolean {
-  const path = metaText(hit, 'assetPath');
-  if (path && config.trackingFile.trim() && path.toLowerCase() === config.trackingFile.trim().toLowerCase()) return true;
-  const name = metaText(hit, 'filename') || metaText(hit, 'name') || hit.name || '';
-  return TRACKING_FILE.test(name) || TRACKING_FILE.test(path);
-}
-
-/** A row as it goes into the file: no picture reference for a shot Elvis already has. */
+/** A row as it goes into the file: no picture reference for a shot linked to Elvis. */
 function forFile(row: ShotRow): ShotRow {
   if (!row.elvisAssetId || !row.imageHash) return row;
   const { imageHash: _dropped, ...fieldTimes } = row.fieldTimes;
   return { ...row, imageHash: null, fieldTimes };
 }
 
-/** What this site would check in: the whole shoot, pictures only where Elvis has none. */
+/** What this site would check in: the whole shoot, no pixels. */
 export function sharedPayload(doc: TrackerDocument): DeltaFile {
   const delta = buildDelta(doc, 0);
   const rows: Record<string, ShotRow> = {};
-  const assets: Record<string, AssetMeta> = {};
-  for (const [id, row] of Object.entries(delta.rows)) {
-    rows[id] = forFile(row);
-    if (!row.elvisAssetId && row.imageHash && delta.assets[row.imageHash]) assets[row.imageHash] = delta.assets[row.imageHash];
+  for (const [id, row] of Object.entries(delta.rows)) rows[id] = forFile(row);
+  return { ...delta, rows, assets: {} };
+}
+
+/** The pictures only this project has: shots not linked to Elvis. */
+function unlinkedImageHashes(doc: TrackerDocument): string[] {
+  const hashes = new Set<string>();
+  for (const id of doc.rowIds) {
+    const row = doc.rows[id];
+    if (row && !row.elvisAssetId && row.imageHash && doc.assets[row.imageHash]) hashes.add(row.imageHash);
   }
-  return { ...delta, rows, assets };
+  return [...hashes];
+}
+
+/** A thumbnail-only copy of a picture — enough to recognise the shot at another site. */
+const thumbOnly = (asset: AssetMeta): AssetMeta => ({ ...asset, reviewUrl: '' });
+
+/** The photos companion: thumbnails of every shot not in Elvis yet, and nothing else. */
+export function photosPayload(doc: TrackerDocument): DeltaFile {
+  const assets: Record<string, AssetMeta> = {};
+  for (const hash of unlinkedImageHashes(doc)) assets[hash] = thumbOnly(doc.assets[hash]);
+  return {
+    kind: 'phototrack-delta',
+    version: 1,
+    exportedAt: Date.now(),
+    exportedBy: getDeviceId(),
+    since: 0,
+    header: doc.header,
+    headerTime: null,
+    rows: {},
+    deletedRowIds: {},
+    assets,
+  };
 }
 
 /**
@@ -104,6 +121,25 @@ export function mergeShared(doc: TrackerDocument, copies: DeltaFile[]): { doc: T
 }
 
 /**
+ * Take the thumbnails this project is missing from the photos file — only
+ * for shots it has, and never over a full-size picture it already holds.
+ */
+export function mergePhotos(doc: TrackerDocument, copies: DeltaFile[]): { doc: TrackerDocument; added: number } {
+  const wanted = new Set(doc.rowIds.map((id) => doc.rows[id]?.imageHash).filter((h): h is string => Boolean(h)));
+  let assets: Record<string, AssetMeta> | null = null;
+  let added = 0;
+  for (const copy of copies) {
+    for (const [hash, asset] of Object.entries(copy.assets)) {
+      if (!wanted.has(hash) || doc.assets[hash] || assets?.[hash]) continue;
+      assets = assets ?? { ...doc.assets };
+      assets[hash] = asset;
+      added++;
+    }
+  }
+  return { doc: assets ? { ...doc, assets } : doc, added };
+}
+
+/**
  * Does the file lack anything this site has? Asked by merging what we'd
  * check in into what the file holds and seeing whether that changes it —
  * the same question, by the same rules, every other site asks. `null` means
@@ -114,4 +150,11 @@ export function fileNeedsUpdate(doc: TrackerDocument, current: DeltaFile | null)
   if (!current) return Object.keys(payload.rows).length > 0 || payload.headerTime !== null;
   const asFile = mergeDelta(emptyDocument(), current).doc;
   return summaryChanged(mergeDelta(asFile, payload).summary);
+}
+
+/** Does the photos file lack a thumbnail of a shot only this site can see? */
+export function photosNeedUpdate(doc: TrackerDocument, current: DeltaFile | null): boolean {
+  const needed = unlinkedImageHashes(doc);
+  if (!current) return needed.length > 0;
+  return needed.some((hash) => !current.assets[hash]);
 }

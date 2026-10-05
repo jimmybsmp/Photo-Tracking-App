@@ -5,6 +5,7 @@ import { SIDE_LABELS, STAGE_LABELS, stagePath, type RowFieldPath, type ShotRow, 
 import { stampTime } from '@/lib/format';
 import { useFileImport } from '@/components/grid/useFileImport';
 import { CommentThread } from './CommentThread';
+import { ElvisLink } from './ElvisLink';
 
 /**
  * Everything about one shot. Switching usage or shot type is purely a display
@@ -14,7 +15,11 @@ import { CommentThread } from './CommentThread';
 export function Inspector() {
   const rowId = useTrackerStore((s) => s.activeRowId);
   const row = useTrackerStore((s) => (rowId ? s.doc.rows[rowId] : undefined));
-  const reviewUrl = useTrackerStore((s) => (row?.imageHash ? s.doc.assets[row.imageHash]?.reviewUrl : undefined));
+  // A picture shared from another site before it reached Elvis is thumbnail-only.
+  const reviewUrl = useTrackerStore((s) => {
+    const asset = row?.imageHash ? s.doc.assets[row.imageHash] : undefined;
+    return asset ? asset.reviewUrl || asset.thumbUrl : undefined;
+  });
   const setField = useTrackerStore((s) => s.setField);
   const openRow = useTrackerStore((s) => s.openRow);
   const deleteRows = useTrackerStore((s) => s.deleteRows);
@@ -32,8 +37,7 @@ export function Inspector() {
           <h2>{row.shotNum || row.elvisName || 'Untitled shot'}</h2>
           {row.elvisAssetId && (
             <span className="muted small" title={row.elvisAssetId}>
-              Elvis · {row.elvisPath ? `${row.elvisPath}/` : ''}
-              {row.elvisName}
+              In Elvis · {row.elvisName}
             </span>
           )}
         </div>
@@ -50,6 +54,8 @@ export function Inspector() {
           </button>
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => void importInto(rowId, e.target.files?.[0])} />
         </div>
+
+        <ElvisLink row={row} />
 
         <div className="form-grid">
           <label className="field-label">

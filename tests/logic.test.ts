@@ -6,15 +6,15 @@
  *
  * Run with `npm run test:logic` (bundled by scripts/test-logic.mjs).
  */
-import { migrate, type ShotRow, type TrackerDocument } from '@/state/schema';
+import { migrate, type AssetMeta, type ShotRow, type TrackerDocument } from '@/state/schema';
+import { createHash } from 'node:crypto';
 import { computeStats, isRowComplete, nextStage, openConcerns } from '@/state/selectors';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { startHistory, undo } from '@/state/history';
 import { setIdentity } from '@/lib/identity';
 import { buildDelta, mergeDelta } from '@/lib/delta';
-import { applyPull, planPull, planPush, recordFor } from '@/lib/elvis/sync';
-import { normalizeElvisConfig, type ElvisConfig, type ElvisHit } from '@/lib/elvis/types';
-import { syncNow, useSyncStore } from '@/lib/elvis/autoSync';
+import { normalizeElvisConfig, type ElvisConfig } from '@/lib/elvis/types';
+import { io, linkShot, lookupAsset, shareProject, syncNow, unlinkShot, useSyncStore } from '@/lib/elvis/autoSync';
 import { sharedPayload } from '@/lib/elvis/sharedFile';
 import { packDelta, unpackDelta } from '@/lib/projectFiles';
 import type { DesktopBridge } from '@/lib/desktop';
@@ -29,6 +29,22 @@ function check(label: string, cond: boolean, extra?: unknown) {
   if (!cond) failures++;
 }
 const tick = () => new Promise((r) => setTimeout(r, 3));
+
+/** Key-order-independent JSON, to compare two copies of a row. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** A picture as the app would hold it, without needing a DOM to decode one. */
+function fakeAsset(fileName: string, bytes: Uint8Array): AssetMeta {
+  const url = `data:image/jpeg;base64,${Buffer.from(bytes).toString('base64')}`;
+  return { hash: createHash('sha256').update(bytes).digest('hex').slice(0, 32), thumbUrl: url, reviewUrl: url, width: 1, height: 1, fileName, bytes: bytes.length };
+}
 const store = () => useTrackerStore.getState();
 
 /** Run store actions against a given document — one "site" at a time. */
@@ -70,11 +86,16 @@ async function main() {
     };
     const { doc } = migrate(v1);
     const r = doc.rows.r1;
-    check('v1 file opens as v2', doc.schemaVersion === 2);
+    check('v1 file opens at the current version', doc.schemaVersion === 3);
     check('v1 values survive unchanged', r.mag.position === '12' && r.pr.retoucher === 'AB' && r.notes === 'hero' && r.mag.pipeline.qc === true && r.pr.pipeline.qc === false);
     check('v1 rows gain an empty comment thread', r.comments && Object.keys(r.comments).length === 0);
     check('v1 edit stamps are kept', r.fieldTimes.shotNum?.t === 5);
     check('longshot complete on mag without assembled/submitted/approved', isRowComplete({ ...r, usage: 'mag' }));
+
+    const v2 = migrate({ ...v1, schemaVersion: 2, elvisLinked: true }).doc;
+    check('a v2 file opens as v3, unshared, its folder link dropped', v2.schemaVersion === 3 && v2.elvisFile === '' && Object.keys(v2.elvisPreviews).length === 0 && !('elvisLinked' in v2));
+    const v3 = migrate({ ...v1, schemaVersion: 3, elvisFile: '/PhotoTrack/G.ptdelta', elvisPreviews: { A1: { version: '2', hash: 'h' }, bad: 4 } }).doc;
+    check('a v3 file keeps its shared file and preview versions', v3.elvisFile === '/PhotoTrack/G.ptdelta' && v3.elvisPreviews.A1?.hash === 'h' && !('bad' in v3.elvisPreviews));
 
     const legacy = {
       headerEvent: 'Old tool',
@@ -173,7 +194,7 @@ async function main() {
     siteB = intoB.doc;
     check('edits to different properties of one shot both survive', siteA.rows[id].mag.pipeline.retouched && siteA.rows[id].pr.pipeline.qc);
     check('a concern travels in a delta file', Object.keys(siteA.rows[id].comments).length === 1);
-    check('both sites end up identical', recordFor(siteA.rows[id]) === recordFor(siteB.rows[id]));
+    check('both sites end up identical', canonical(siteA.rows[id]) === canonical(siteB.rows[id]));
 
     // Same Elvis asset, different row ids at two sites → merged, not duplicated.
     const a = { ...siteA.rows[id], id: 'local-1', elvisAssetId: 'X9' };
@@ -185,224 +206,160 @@ async function main() {
   }
 
   /* ---------------------------------------------------------------- */
-  console.log('\nElvis: three sites, one shoot');
+  console.log('\nElvis: dropped JPEGs, a shared file, shots linked by hand (real client, mock server)');
   {
-    const config = normalizeElvisConfig({
-      endpoint: 'https://dam.example.com',
-      username: 'u',
-      recordField: 'cf_photoTrack',
-      mirror: { magSpread: 'cf_spread', magStatus: 'cf_magStatus' },
-    });
-
-    // The "server": asset id → metadata.
-    const server: Record<string, Record<string, unknown>> = {
-      A1: { filename: 'IMG_4821.CR3', folderPath: '/Shoots/Gala', cf_spread: '12' },
-      A2: { filename: 'IMG_4822.CR3', folderPath: '/Shoots/Gala' },
-    };
-    const hits = (): ElvisHit[] => Object.entries(server).map(([id, metadata]) => ({ id, metadata: { ...metadata } }));
-    const sync = async (doc: TrackerDocument, who: string) => {
-      setIdentity({ name: who, role: 'staff' });
-      const h = hits();
-      const pulled = applyPull(doc, planPull(doc, h, config), new Map()).doc;
-      for (const p of planPush(pulled, h, config)) Object.assign(server[p.assetId], p.metadata);
-      return pulled;
-    };
-    const rowFor = (doc: TrackerDocument, asset: string): ShotRow => doc.rows[doc.rowIds.find((id) => doc.rows[id].elvisAssetId === asset) as string];
-
-    // First pull: shots appear with shot number, name and folder; a mirror value fills in.
-    let london = await sync((store().newProject(), store().doc), 'London');
-    const first = rowFor(london, 'A1');
-    check('a pulled shot is no longer blank', first.shotNum === 'IMG_4821' && first.elvisName === 'IMG_4821.CR3' && first.elvisPath === '/Shoots/Gala', first);
-    check('a mirror field fills in on first pull', first.mag.position === '12');
-    check('the project is now linked to Elvis', london.elvisLinked);
-    check('the first sync writes a record to every asset', typeof server.A1.cf_photoTrack === 'string' && typeof server.A2.cf_photoTrack === 'string');
-
-    let ny = await sync(store().doc && (store().newProject(), store().doc), 'NewYork');
-    check('a second site pulls the same shots under the same ids', ny.rowIds.join() === london.rowIds.join());
-
-    // Concurrent work at both sites.
-    const a1 = first.id;
-    london = await onSite(london, 'London', () => {
-      store().setField(a1, 'usage', 'both');
-      store().setStage(a1, 'mag', 'retouched', true);
-      store().addComment(a1, { kind: 'concern', text: 'Needs CMYK proof', side: 'mag' });
-    });
-    ny = await onSite(ny, 'NewYork', () => {
-      store().setField(a1, 'pr.retoucher', 'NYC team');
-      store().setStage(a1, 'pr', 'retouched', true);
-    });
-
-    london = await sync(london, 'London');
-    ny = await sync(ny, 'NewYork');
-    london = await sync(london, 'London');
-
-    const l = rowFor(london, 'A1');
-    const n = rowFor(ny, 'A1');
-    check('London sees New York’s press-release work', l.pr.retoucher === 'NYC team' && l.pr.pipeline.retouched);
-    check('New York sees London’s magazine work and concern', n.mag.pipeline.retouched && openConcerns(n).length === 1 && openConcerns(n)[0].author === 'London');
-    check('neither site overwrote the other', l.usage === 'both' && n.usage === 'both');
-    check('who did it travels with the change', n.fieldTimes['mag.pipeline.retouched']?.u === 'London', n.fieldTimes['mag.pipeline.retouched']);
-
-    // An executive at a third site resolves nothing but raises a concern; staff resolve it.
-    let exec = await sync((store().newProject(), store().doc), 'Exec');
-    exec = await onSite(exec, 'Exec', () => store().addComment(a1, { kind: 'concern', text: 'Spread 12 too dark', side: 'mag' }));
-    exec = await sync(exec, 'Exec');
-    london = await sync(london, 'London');
-    const execConcern = openConcerns(rowFor(london, 'A1')).find((c) => c.author === 'Exec');
-    check('the executive’s concern reaches London', Boolean(execConcern));
-    london = await onSite(london, 'London', () => store().setCommentResolved(a1, execConcern!.id, true));
-    london = await sync(london, 'London');
-    exec = await sync(exec, 'Exec');
-    const back = rowFor(exec, 'A1').comments[execConcern!.id];
-    check('…and its resolution comes back to the executive', back.resolved && back.resolvedBy === 'London');
-
-    // Mirror fields don't override real work once a record exists.
-    server.A1.cf_spread = '99';
-    ny = await sync(ny, 'NewYork');
-    london = await sync(london, 'London');
-    check('a value read from a plain field at one site reaches the others', rowFor(ny, 'A1').mag.position === '12', rowFor(ny, 'A1').mag.position);
-    check('a stale plain field in Elvis can’t overwrite tracked data', rowFor(london, 'A1').mag.position === '12');
-    check('the status field reflects progress, for people in Elvis', String(server.A1.cf_magStatus).startsWith('Waiting on'));
-
-    // Idle: nothing to write.
-    ny = await sync(ny, 'NewYork');
-    check('an idle project makes no writes', planPush(ny, hits(), config).length === 0, planPush(ny, hits(), config));
-
-    // A typed shot number is never replaced by the filename guess.
-    ny = await onSite(ny, 'NewYork', () => store().setField(rowFor(ny, 'A2').id, 'shotNum', 'HERO-1'));
-    ny = await sync(ny, 'NewYork');
-    check('a shot number someone typed survives every pull', rowFor(ny, 'A2').shotNum === 'HERO-1');
-
-    // Deleted here stays deleted.
-    const a2 = rowFor(london, 'A2').id;
-    london = await onSite(london, 'London', () => store().deleteRows([a2]));
-    const deletedNow = london;
-    london = await sync(london, 'London');
-    check('a shot deleted here is not pulled back in', !london.rows[a2] && deletedNow.deletedRowIds[a2] !== undefined);
-  }
-
-  /* ---------------------------------------------------------------- */
-  console.log('\nElvis: three sites, one shared tracking file (real client, mock server)');
-  {
-    const server = await startMockElvis({ assetCount: 3 });
+    // 30 assets in the Elvis folder — test frames; only the ones a retoucher links matter.
+    const server = await startMockElvis({ assetCount: 30 });
     const client = createElvisClient(nodeTransport());
     const bridge = {
-      elvisSearch: (c: ElvisConfig) => client.search(c),
+      elvisTest: (c: ElvisConfig) => client.test(c),
+      elvisLookup: (c: ElvisConfig, text: string) => client.lookup(c, text),
+      elvisAssetsById: (c: ElvisConfig, ids: string[]) => client.assetsById(c, ids),
+      elvisListFiles: (c: ElvisConfig, folder: string) => client.listFiles(c, folder),
       elvisFetchImage: (c: ElvisConfig, url: string) => client.fetchImage(c, url),
-      elvisUpdate: (c: ElvisConfig, id: string, metadata: Record<string, unknown>) => client.update(c, id, metadata),
       elvisFindFile: (c: ElvisConfig, path: string) => client.findFile(c, path),
       elvisDownload: (c: ElvisConfig, url: string) => client.download(c, url),
       elvisUpload: (c: ElvisConfig, file: Parameters<DesktopBridge['elvisUpload']>[1]) => client.upload(c, file),
     } as unknown as DesktopBridge;
     (globalThis as unknown as { window: unknown }).window = { phototrack: bridge };
+    // Decoding a picture needs a DOM; a stand-in keyed on the bytes is enough here.
+    io.importImageBytes = async (bytes: Uint8Array, _mime: string, fileName: string) => fakeAsset(fileName, bytes);
 
     const PATH = '/PhotoTrack/Gala 2026.ptdelta';
-    const config = normalizeElvisConfig({ endpoint: server.origin, username: USER, password: PASSWORD, query: '*', trackingFile: PATH });
-    check('a new setup shares through one file by default', config.sharedStore === 'file');
-    check('a setup already using a record field keeps it', normalizeElvisConfig({ recordField: 'cf_photoTrack' }).sharedStore === 'field');
+    const PHOTOS = '/PhotoTrack/Gala 2026.photos.ptdelta';
+    const config = normalizeElvisConfig({ endpoint: server.origin, username: USER, password: PASSWORD, query: '*', recordField: 'cf_x' });
+    check('an old setup’s folder query and record field are dropped', !('query' in config) && !('recordField' in config), config);
     useSyncStore.setState({ config });
 
-    const run = async (doc: TrackerDocument, who: string, link = false) => {
+    const run = async (doc: TrackerDocument, who: string, fn?: () => unknown) => {
       setIdentity({ name: who, role: who === 'Exec' ? 'executive' : 'staff' });
       useTrackerStore.setState({ doc });
       await tick();
-      await syncNow({ link });
+      if (fn) await fn();
+      await syncNow();
       return store().doc;
     };
     const fresh = () => (store().newProject(), store().doc);
-    const fileAssets = () => server.state.assets.filter((a: { metadata: { assetPath?: string } }) => a.metadata.assetPath === PATH);
-    const rowFor = (doc: TrackerDocument, asset: string): ShotRow => doc.rows[doc.rowIds.find((id) => doc.rows[id].elvisAssetId === asset) as string];
+    const filesAt = (path: string) => server.state.assets.filter((a: { metadata: { assetPath?: string } }) => a.metadata.assetPath === path);
+    const fileContent = (path: string) => unpackDelta(new Uint8Array(server.state.files.get(filesAt(path)[0].id)));
+    const byShot = (doc: TrackerDocument, shot: string): ShotRow => doc.rows[doc.rowIds.find((id) => doc.rows[id].shotNum === shot) as string];
     const uploads = () => server.state.uploads.length;
+    const queriesFrom = server.state.queries.length;
 
-    let london = await run(fresh(), 'London', true);
-    check('first pull brings in the photos', london.rowIds.length === 3, london.rowIds.length);
-    check('…creates the one shared file at the chosen path', fileAssets().length === 1 && uploads() === 1, server.state.uploads);
-    check('…and never writes to the photos', server.state.updates.length === 0, server.state.updates);
-
-    let ny = await run(fresh(), 'NewYork', true);
-    check('a second site gets the same shots', ny.rowIds.join() === london.rowIds.join());
-    check('the tracking file is never mistaken for a shot', ny.rowIds.every((id) => !/\.ptdelta$/i.test(ny.rows[id].elvisName)), ny.rowIds.map((id) => ny.rows[id].elvisName));
-    check('a site with nothing new checks nothing in', uploads() === 1, server.state.uploads);
-
-    const a1 = rowFor(london, 'A1').id;
-    london = await onSite(london, 'London', () => {
-      store().setField(a1, 'usage', 'both');
-      store().setStage(a1, 'mag', 'retouched', true);
-      store().setField(a1, 'mag.position', '14');
+    // The selector drops three JPEGs and starts sharing.
+    let london = fresh();
+    london = await onSite(london, 'Selector', () => {
+      store().addRowsFromAssets(['IMG_4821.jpg', 'IMG_4822.jpg', 'IMG_4823.jpg'].map((n) => fakeAsset(n, new TextEncoder().encode(n))));
+      store().setField(store().doc.rowIds[0], 'usage', 'both');
     });
-    london = await run(london, 'London');
-    check('an edit checks in a new version of the same file', uploads() === 2 && fileAssets().length === 1 && fileAssets()[0].metadata.versionNumber === 2, server.state.uploads);
+    london = await run(london, 'Selector', () => shareProject(PATH));
+    check('sharing creates the shared file and its photos file', filesAt(PATH).length === 1 && filesAt(PHOTOS).length === 1, server.state.uploads);
+    check('…the shared file holds the shots, no pixels', Object.keys(fileContent(PATH).rows).length === 3 && Object.keys(fileContent(PATH).assets).length === 0);
+    check('…the photos file holds a thumbnail of each, no full size', Object.values(fileContent(PHOTOS).assets).length === 3 && Object.values(fileContent(PHOTOS).assets).every((a) => a.thumbUrl && !a.reviewUrl));
+    check('the project remembers its shared file', london.elvisFile === PATH);
 
-    ny = await onSite(ny, 'NewYork', () => {
-      store().setField(a1, 'pr.retoucher', 'NYC team');
-      store().setStage(a1, 'pr', 'retouched', true);
+    // Another site joins.
+    let exec = await run(fresh(), 'Exec', () => shareProject(PATH));
+    const e4821 = byShot(exec, 'IMG_4821');
+    check('a site that joins gets every shot', exec.rowIds.length === 3 && e4821?.usage === 'both', exec.rowIds.length);
+    check('…with the photos the selector dropped in', exec.rowIds.every((id) => Boolean(exec.assets[exec.rows[id].imageHash ?? '']?.thumbUrl)));
+    check('joining writes nothing new', uploads() === 2, server.state.uploads);
+
+    // The retoucher's first pass is in Elvis: they link the shot to it.
+    const rowId = byShot(london, 'IMG_4821').id;
+    const dropped = byShot(london, 'IMG_4821').imageHash;
+    const found = await lookupAsset('IMG_4821');
+    check('finding the asset by shot number', found.ok && found.hits?.[0]?.name === 'IMG_4821.tif', found);
+    london = await run(london, 'Retoucher', async () => {
+      const linked = await linkShot(rowId, found.hits![0]);
+      check('linking succeeds with its preview', linked.ok && !linked.warning, linked);
     });
-    ny = await run(ny, 'NewYork');
-    check('New York gets London’s work and adds its own', rowFor(ny, 'A1').mag.pipeline.retouched && rowFor(ny, 'A1').mag.position === '14' && uploads() === 3);
-    check('who did it travels in the file', rowFor(ny, 'A1').fieldTimes['mag.pipeline.retouched']?.u === 'London');
+    const lRow = london.rows[rowId];
+    check('the shot is linked, with the file name and folder from Elvis', lRow.elvisAssetId === 'A1' && lRow.elvisName === 'IMG_4821.tif' && lRow.elvisPath === '/Shoots/Gala');
+    check('…its picture is now the Elvis preview', lRow.imageHash !== dropped && london.elvisPreviews.A1?.hash === lRow.imageHash);
+    check('…and the link went out in the shared file', fileContent(PATH).rows[rowId].elvisAssetId === 'A1' && fileContent(PATH).rows[rowId].fieldTimes.elvisAssetId?.u === 'Retoucher');
 
-    let exec = await run(fresh(), 'Exec', true);
-    check('a third site starting empty gets everything', rowFor(exec, 'A1').pr.retoucher === 'NYC team' && rowFor(exec, 'A1').mag.pipeline.retouched);
-    exec = await onSite(exec, 'Exec', () => store().addComment(a1, { kind: 'concern', text: 'Spread 14 too dark', side: 'mag' }));
     exec = await run(exec, 'Exec');
+    check('another site picks up the link and fetches the preview itself', exec.rows[rowId].elvisAssetId === 'A1' && exec.rows[rowId].imageHash === lRow.imageHash);
 
-    // Two sites check in at the same moment: the later version lacks the
-    // earlier one's change. Simulated by putting the previous version back.
-    const fileId = fileAssets()[0].id;
-    const withConcern = server.state.files.get(fileId);
-    const beforeConcern = Buffer.from(packDelta(sharedPayload(ny)));
-    server.state.files.set(fileId, beforeConcern);
-    fileAssets()[0].metadata.versionNumber += 1;
-    check('(race set up: the file has lost the concern)', Object.keys(unpackDelta(new Uint8Array(beforeConcern)).rows[a1].comments).length === 0 && !!withConcern);
-    const beforeRetry = uploads();
+    // A new version checked in to Elvis shows up everywhere.
+    server.newVersion('A1');
+    london = await run(london, 'Retoucher');
     exec = await run(exec, 'Exec');
-    check('…the site whose change was lost notices and checks it in again', uploads() === beforeRetry + 1, { beforeRetry, after: uploads() });
-    london = await run(london, 'London');
-    const concern = openConcerns(rowFor(london, 'A1')).find((c) => c.author === 'Exec');
-    check('…and it arrives at the other sites', Boolean(concern));
+    check('a new version in Elvis updates the picture at every site', london.rows[rowId].imageHash !== lRow.imageHash && exec.rows[rowId].imageHash === london.rows[rowId].imageHash);
+    check('…shown as Elvis’s change, not a person’s', london.rows[rowId].fieldTimes.imageHash?.u === 'Elvis');
 
-    london = await onSite(london, 'London', () => store().setCommentResolved(a1, concern!.id, true));
-    london = await run(london, 'London');
+    // Idle: nothing written, nothing downloaded again.
+    const before = { up: uploads(), img: server.state.imageFetches };
+    london = await run(london, 'Retoucher');
     exec = await run(exec, 'Exec');
-    const back = rowFor(exec, 'A1').comments[concern!.id];
-    check('the resolution comes back to the executive', back?.resolved && back.resolvedBy === 'London');
+    check('idle syncs write nothing and fetch no pictures', uploads() === before.up && server.state.imageFetches === before.img, { before, up: uploads(), img: server.state.imageFetches });
 
-    const before = uploads();
-    ny = await run(ny, 'NewYork');
-    ny = await run(ny, 'NewYork');
+    const asked = server.state.queries.slice(queriesFrom);
+    check('Elvis is only ever asked for linked ids, the shared folder, or a lookup — never the whole folder', asked.every((q: string) => /^(id:|folderPath:|name:)/.test(q)), asked);
+    check('…and the other test frames were never touched', server.state.imageFetches <= 6, server.state.imageFetches);
+
+    // An executive concern reaches the retoucher, and the resolution comes back.
+    exec = await run(exec, 'Exec', () => store().addComment(rowId, { kind: 'concern', text: 'Skin too warm on the left', side: 'mag' }));
+    london = await run(london, 'Retoucher');
+    const concern = openConcerns(london.rows[rowId]).find((c) => c.author === 'Exec');
+    check('the executive’s concern reaches the retoucher', Boolean(concern));
+    london = await run(london, 'Retoucher', () => store().setCommentResolved(rowId, concern!.id, true));
     exec = await run(exec, 'Exec');
-    london = await run(london, 'London');
-    check('once everyone is in step, idle syncs write nothing', uploads() === before, { before, after: uploads() });
+    check('…and its resolution comes back', exec.rows[rowId].comments[concern!.id]?.resolved === true);
 
-    const a3 = rowFor(london, 'A3').id;
-    london = await onSite(london, 'London', () => store().deleteRows([a3]));
-    london = await run(london, 'London');
-    ny = await run(ny, 'NewYork');
-    ny = await run(ny, 'NewYork');
-    check('a deleted shot goes at every site and the photo pull doesn’t bring it back', !ny.rows[a3] && !london.rows[a3]);
+    // A lost check-in race heals.
+    const fileId = filesAt(PATH)[0].id;
+    exec = await run(exec, 'Exec', () => store().setStage(rowId, 'pr', 'qc', true));
+    const stale = Buffer.from(packDelta(sharedPayload(london)));
+    server.state.files.set(fileId, stale);
+    filesAt(PATH)[0].metadata.versionNumber += 1;
+    const n0 = uploads();
+    exec = await run(exec, 'Exec');
+    check('a site whose change was overwritten checks it in again', uploads() === n0 + 1 && fileContent(PATH).rows[rowId].pr.pipeline.qc, server.state.uploads.slice(n0));
 
-    // Two copies at the path (two sites created it at once): both are read.
+    // The asset disappears from Elvis: the shot keeps its last picture.
+    server.remove('A1');
+    london = await run(london, 'Retoucher');
+    check('an asset gone from Elvis is reported, and the picture stays', useSyncStore.getState().missing.join() === 'A1' && Boolean(london.assets[london.rows[rowId].imageHash ?? '']));
+
+    // Unlinking: the picture stays, and now travels in the photos file.
+    london = await run(london, 'Retoucher', () => unlinkShot(rowId));
+    exec = await run(exec, 'Exec');
+    check('unlinking reaches the other sites and keeps the picture', exec.rows[rowId].elvisAssetId === '' && Boolean(exec.assets[exec.rows[rowId].imageHash ?? '']));
+    check('…which now travels in the photos file', Boolean(fileContent(PHOTOS).assets[london.rows[rowId].imageHash ?? '']));
+
+    // A deleted shot goes everywhere.
+    const r3 = byShot(london, 'IMG_4823').id;
+    london = await run(london, 'Selector', () => store().deleteRows([r3]));
+    exec = await run(exec, 'Exec');
+    check('a deleted shot goes at every site', !exec.rows[r3] && !london.rows[r3]);
+
+    // Two copies at the path: both are read.
     const stray = sharedPayload(exec);
-    stray.rows = { [a1]: { ...stray.rows[a1], comments: { x1: { ...back!, id: 'x1', text: 'From the second copy', resolved: false, resolvedBy: '', resolvedAt: 0, resolvedDevice: '' } } } };
+    const extra = { ...stray.rows[rowId], notes: 'from the second copy', fieldTimes: { ...stray.rows[rowId].fieldTimes, notes: { t: Date.now() + 1000, d: 'z', u: 'Z' } } };
+    stray.rows = { [rowId]: extra };
     server.state.assets.push({ id: 'Z9', metadata: { filename: 'Gala 2026.ptdelta', name: 'Gala 2026.ptdelta', folderPath: '/PhotoTrack', assetPath: PATH, versionNumber: 1 } });
     server.state.files.set('Z9', Buffer.from(packDelta(stray)));
-    ny = await run(ny, 'NewYork');
-    check('a second copy of the file is merged, not ignored', Boolean(rowFor(ny, 'A1').comments.x1));
-    check('…and the first copy is the one kept up to date', unpackDelta(new Uint8Array(server.state.files.get(fileId))).rows[a1].comments.x1 !== undefined);
+    london = await run(london, 'Selector');
+    check('a second copy of the file is merged, not ignored', london.rows[rowId].notes === 'from the second copy');
 
-    // Something that isn't ours at the path is never overwritten.
-    const foreignPath = '/PhotoTrack/Notes.ptdelta';
-    server.state.assets.push({ id: 'Q1', metadata: { filename: 'Notes.ptdelta', name: 'Notes.ptdelta', folderPath: '/PhotoTrack', assetPath: foreignPath, versionNumber: 1 } });
+    // Something at the path that isn't ours is never overwritten.
+    const foreign = '/PhotoTrack/Notes.ptdelta';
+    server.state.assets.push({ id: 'Q1', metadata: { filename: 'Notes.ptdelta', name: 'Notes.ptdelta', folderPath: '/PhotoTrack', assetPath: foreign, versionNumber: 1 } });
     server.state.files.set('Q1', Buffer.from('not a zip'));
-    useSyncStore.setState({ config: { ...config, trackingFile: foreignPath } });
-    const n0 = uploads();
-    ny = await run(ny, 'NewYork');
-    check('a file at the path that isn’t PhotoTrack’s is left alone, with a reason', uploads() === n0 && useSyncStore.getState().status === 'error' && /isn't a PhotoTrack/.test(useSyncStore.getState().lastResult), useSyncStore.getState().lastResult);
-    useSyncStore.setState({ config: { ...config, trackingFile: 'Gala.ptdelta' } });
-    ny = await run(ny, 'NewYork');
+    const n1 = uploads();
+    london = await run({ ...london, elvisFile: foreign }, 'Selector');
+    check('a file that isn’t PhotoTrack’s is left alone, with a reason', uploads() === n1 && useSyncStore.getState().status === 'error' && /isn't a PhotoTrack/.test(useSyncStore.getState().lastResult), useSyncStore.getState().lastResult);
+    london = await run({ ...london, elvisFile: 'Gala.ptdelta' }, 'Selector');
     check('a path without a folder is refused with a reason', /folder/.test(useSyncStore.getState().lastResult), useSyncStore.getState().lastResult);
 
-    check('across all of it, no photo’s metadata was written', server.state.updates.length === 0, server.state.updates);
+    // A project that isn't shared and has nothing linked never talks to Elvis.
+    const q0 = server.state.queries.length;
+    await run(fresh(), 'Selector', () => store().addRowsFromAssets([fakeAsset('IMG_9.jpg', new Uint8Array([9]))]));
+    check('an unshared project with nothing linked makes no Elvis calls', server.state.queries.length === q0);
+
+    check('across all of it, no photo in Elvis was written to', server.state.updates.length === 0 && server.state.uploads.every((u: { id: string }) => !/^A\d+$/.test(u.id)), server.state.updates);
     await server.close();
   }
 
