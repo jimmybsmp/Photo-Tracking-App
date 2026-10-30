@@ -1,12 +1,15 @@
 import {
   LONGSHOT_EXEMPT_STAGES,
   PIPELINE_STAGES,
+  REJECT_KINDS,
+  REJECT_LABELS,
   STAGE_LABELS,
   parseFieldPath,
   rowFieldPaths,
   trackOf,
   type PipelineStage,
   type PropertyDef,
+  type RejectKind,
   type ShotComment,
   type ShotRow,
   type Side,
@@ -36,8 +39,9 @@ export function applicableStages(row: ShotRow): PipelineStage[] {
   return PIPELINE_STAGES.filter((s) => !LONGSHOT_EXEMPT_STAGES.includes(s));
 }
 
+/** Every applicable stage done, and not sent back — a shot on a reject is never complete. */
 export function isSideComplete(row: ShotRow, side: Side): boolean {
-  return applicableStages(row).every((stage) => trackOf(row, side).pipeline[stage]);
+  return rejectsOf(row, side).length === 0 && applicableStages(row).every((stage) => trackOf(row, side).pipeline[stage]);
 }
 
 /** Complete when every applicable stage is done on every active property. */
@@ -53,9 +57,29 @@ export function nextStage(row: ShotRow, side: Side): PipelineStage | null {
 
 /** Plain-language status for one property: "Waiting on QC", "Complete". */
 export function sideStatusLabel(row: ShotRow, side: Side): string {
+  const rejects = rejectsOf(row, side);
+  if (rejects.length) return rejectLabel(rejects);
   const next = nextStage(row, side);
   return next ? `Waiting on ${STAGE_LABELS[next]}` : 'Complete';
 }
+
+/* ------------------------------------------------------------------ *
+ * Rejects
+ * ------------------------------------------------------------------ */
+
+/** The rejects a property's track is on — QC, office, both, or none. */
+export function rejectsOf(row: ShotRow, side: Side): RejectKind[] {
+  const track = trackOf(row, side);
+  return REJECT_KINDS.filter((kind) => track[kind]);
+}
+
+/** "QC reject", "Office reject", or "QC + office reject". */
+export const rejectLabel = (kinds: RejectKind[]) =>
+  kinds.length > 1 ? 'QC + office reject' : kinds.length ? REJECT_LABELS[kinds[0]] : '';
+
+/** On a reject in any property it runs in. */
+export const isRejected = (row: ShotRow, properties: PropertyDef[]) =>
+  activeSides(row, properties).some((side) => rejectsOf(row, side).length > 0);
 
 /** How many applicable stages are done, for a small progress bar. */
 export function sideProgress(row: ShotRow, side: Side): { done: number; total: number } {
@@ -98,6 +122,8 @@ export interface SideStats {
   shots: number;
   complete: number;
   stalled: number;
+  /** Shots on a QC or office reject here. */
+  rejected: number;
   stages: Record<PipelineStage, StageCount>;
   /** How many shots are currently waiting on each stage. */
   waiting: Record<PipelineStage, number>;
@@ -110,6 +136,8 @@ export interface DocStats {
   shared: number;
   unassignedUsage: number;
   openConcerns: number;
+  /** Shots on a reject in any property they run in. */
+  rejected: number;
   /** Per property id, for every property in use. */
   sides: Record<Side, SideStats>;
 }
@@ -121,7 +149,7 @@ function emptySideStats(): SideStats {
     stages[s] = { done: 0, eligible: 0 };
     waiting[s] = 0;
   }
-  return { shots: 0, complete: 0, stalled: 0, stages, waiting };
+  return { shots: 0, complete: 0, stalled: 0, rejected: 0, stages, waiting };
 }
 
 export function computeStats(doc: TrackerDocument): DocStats {
@@ -132,6 +160,7 @@ export function computeStats(doc: TrackerDocument): DocStats {
     shared: 0,
     unassignedUsage: 0,
     openConcerns: 0,
+    rejected: 0,
     sides: Object.fromEntries(properties.map((p) => [p.id, emptySideStats()])),
   };
 
@@ -144,6 +173,7 @@ export function computeStats(doc: TrackerDocument): DocStats {
     if (sides.length === 0) stats.unassignedUsage++;
     stats.openConcerns += openConcerns(row).length;
     if (isRowComplete(row, properties)) stats.complete++;
+    if (isRejected(row, properties)) stats.rejected++;
 
     const applicable = applicableStages(row);
     for (const side of sides) {
@@ -156,8 +186,9 @@ export function computeStats(doc: TrackerDocument): DocStats {
       }
       const next = nextStage(row, side);
       if (next) s.waiting[next]++;
-      else s.complete++;
+      if (isSideComplete(row, side)) s.complete++;
       if (isStalled(row, side)) s.stalled++;
+      if (rejectsOf(row, side).length) s.rejected++;
     }
   }
   return stats;
@@ -166,7 +197,7 @@ export function computeStats(doc: TrackerDocument): DocStats {
 /** Something on a shot that someone should act on. */
 export interface AttentionItem {
   rowId: string;
-  kind: 'concern' | 'stalled' | 'no-usage' | 'no-retoucher';
+  kind: 'reject' | 'concern' | 'stalled' | 'no-usage' | 'no-retoucher';
   side: Side | null;
   text: string;
   /** For sorting: concerns first, then oldest. */
@@ -188,6 +219,11 @@ export function attentionItems(doc: TrackerDocument): AttentionItem[] {
     }
     for (const side of sides) {
       const name = doc.properties[side]?.name ?? side;
+      const rejects = rejectsOf(row, side);
+      if (rejects.length) {
+        const at = Math.max(...rejects.map((kind) => row.fieldTimes[`${side}.${kind}`]?.t ?? 0));
+        items.push({ rowId: id, kind: 'reject', side, text: `${name}: ${rejectLabel(rejects)}`, at });
+      }
       if (isStalled(row, side)) {
         items.push({ rowId: id, kind: 'stalled', side, text: `${name}: retouched, waiting on QC`, at: 0 });
       }
@@ -196,7 +232,7 @@ export function attentionItems(doc: TrackerDocument): AttentionItem[] {
       }
     }
   }
-  const order = { concern: 0, stalled: 1, 'no-retoucher': 2, 'no-usage': 3 };
+  const order = { reject: 0, concern: 1, stalled: 2, 'no-retoucher': 3, 'no-usage': 4 };
   return items.sort((a, b) => order[a.kind] - order[b.kind] || a.at - b.at);
 }
 
@@ -266,6 +302,8 @@ export function recentActivity(doc: TrackerDocument, limit = 25): ActivityEntry[
           text = `${track.pipeline[stage] ? 'marked' : 'unmarked'} ${STAGE_LABELS[stage]} on ${shot} (${tag})`;
         } else if (parsed.field === 'retoucher') {
           text = `assigned ${track.retoucher || 'no one'} to retouch ${shot} (${tag})`;
+        } else if (parsed.field === 'qcReject' || parsed.field === 'officeReject') {
+          text = `${track[parsed.field] ? 'put' : 'cleared'} ${shot} ${track[parsed.field] ? 'on' : 'from'} ${REJECT_LABELS[parsed.field]} (${tag})`;
         } else if (parsed.field === 'on') {
           text = `${track.on ? 'added' : 'took'} ${shot} ${track.on ? 'to' : 'out of'} ${doc.properties[parsed.side]?.name ?? tag}`;
         } else continue;
@@ -304,7 +342,7 @@ export interface Filters {
   select: 'all' | 'main' | 'alt';
   /** Show only shots waiting on this stage (on whichever property is filtered). */
   waitingOn: 'all' | PipelineStage | 'complete';
-  attention: 'all' | 'concerns' | 'any';
+  attention: 'all' | 'rejected' | 'concerns' | 'any';
   search: string;
 }
 
@@ -342,16 +380,18 @@ export function matchesFilters(row: ShotRow, f: Filters, properties: PropertyDef
     if (sides.length === 0) return false;
     const match =
       f.waitingOn === 'complete'
-        ? sides.every((side) => nextStage(row, side) === null)
+        ? sides.every((side) => isSideComplete(row, side))
         : sides.some((side) => nextStage(row, side) === f.waitingOn);
     if (!match) return false;
   }
 
   if (f.attention === 'concerns' && openConcerns(row).length === 0) return false;
+  if (f.attention === 'rejected' && !sides.some((side) => rejectsOf(row, side).length > 0)) return false;
   if (f.attention === 'any') {
     const flagged =
       openConcerns(row).length > 0 ||
       active.length === 0 ||
+      isRejected(row, properties) ||
       active.some((side) => isStalled(row, side) || (!trackOf(row, side).retoucher.trim() && !trackOf(row, side).pipeline.retouched));
     if (!flagged) return false;
   }

@@ -8,7 +8,21 @@
  */
 import { SCHEMA_VERSION, defaultProperties, migrate, trackOf, withLegacyFields, type AssetMeta, type ShotRow, type TrackerDocument } from '@/state/schema';
 import { propertyList } from '@/state/properties';
-import { activeSides, computeStats, defaultFilters, isRowComplete, isShared, matchesFilters, nextStage, openConcerns } from '@/state/selectors';
+import {
+  activeSides,
+  attentionItems,
+  computeStats,
+  defaultFilters,
+  isRejected,
+  isRowComplete,
+  isShared,
+  isSideComplete,
+  matchesFilters,
+  nextStage,
+  openConcerns,
+  rejectsOf,
+  sideStatusLabel,
+} from '@/state/selectors';
 import { createHash } from 'node:crypto';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { startHistory, undo } from '@/state/history';
@@ -287,6 +301,45 @@ async function main() {
       rowIds: ['r'],
     }).doc;
     check('a v3 file opens with both tracks on and the usage stamp on each', v3.rows.r.tracks.mag.on && v3.rows.r.tracks.pr.on && v3.rows.r.tracks.mag.position === '7' && v3.rows.r.fieldTimes['pr.on']?.u === 'Jo' && !('usage' in v3.rows.r.fieldTimes));
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log('\nrejects');
+  {
+    store().newProject();
+    setIdentity({ name: 'QC desk', role: 'staff' });
+    const id = store().addRow();
+    store().setField(id, 'mag.on', true);
+    store().setField(id, 'pr.on', true);
+    for (const stage of ['retouched', 'qc', 'assembled', 'submitted', 'approved'] as const) store().setStage(id, 'mag', stage, true);
+    let props = propertyList(store().doc.properties);
+    check('a finished track with no reject is complete', isSideComplete(store().doc.rows[id], 'mag'));
+
+    store().setField(id, 'mag.qcReject', true);
+    let row = store().doc.rows[id];
+    check('a QC reject is its own flag on that property only', row.tracks.mag.qcReject && !row.tracks.pr.qcReject && !row.tracks.mag.officeReject);
+    check('…shown as the status', sideStatusLabel(row, 'mag') === 'QC reject' && rejectsOf(row, 'pr').length === 0);
+    check('…and a shot on a reject is never complete, whatever is ticked', !isSideComplete(row, 'mag') && row.tracks.mag.pipeline.approved);
+    store().setField(id, 'mag.officeReject', true);
+    row = store().doc.rows[id];
+    check('both rejects at once', sideStatusLabel(row, 'mag') === 'QC + office reject');
+    const stats = computeStats(store().doc);
+    check('the overview counts it', stats.rejected === 1 && stats.sides.mag.rejected === 1 && stats.sides.mag.complete === 0 && stats.sides.pr.rejected === 0);
+    check('rejects head the needs-attention list', attentionItems(store().doc)[0]?.kind === 'reject');
+    check('the "on a reject" filter finds it, per property', matchesFilters(row, { ...defaultFilters, attention: 'rejected' }, props) && !matchesFilters(row, { ...defaultFilters, attention: 'rejected', property: 'pr' }, props));
+    check('who set it is recorded', row.fieldTimes['mag.qcReject']?.u === 'QC desk');
+
+    // Clearing at one site while the other site sets the office reject on PR.
+    const base = store().doc;
+    let siteA = await onSite(base, 'A', () => store().setField(id, 'mag.qcReject', false));
+    let siteB = await onSite(base, 'B', () => store().setField(id, 'pr.officeReject', true));
+    siteA = mergeDelta(siteA, buildDelta(siteB, 0)).doc;
+    siteB = mergeDelta(siteB, buildDelta(siteA, 0)).doc;
+    check('rejects set and cleared at two sites merge', canonical(siteA.rows[id].tracks) === canonical(siteB.rows[id].tracks) && !siteA.rows[id].tracks.mag.qcReject && siteA.rows[id].tracks.mag.officeReject && siteA.rows[id].tracks.pr.officeReject);
+
+    const v4 = migrate({ schemaVersion: 4, rows: { r: { id: 'r', tracks: { mag: { on: true } } } }, rowIds: ['r'] }).doc;
+    props = propertyList(v4.properties);
+    check('a v4 file opens with nothing on reject', v4.schemaVersion === SCHEMA_VERSION && !v4.rows.r.tracks.mag.qcReject && !isRejected(v4.rows.r, props));
   }
 
   /* ---------------------------------------------------------------- */

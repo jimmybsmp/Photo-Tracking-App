@@ -1,9 +1,20 @@
 import { useRef, type CSSProperties } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { useUiStore } from '@/state/ui';
-import { activeSides, applicableStages, nextStage, sideProgress } from '@/state/selectors';
+import { activeSides, applicableStages, nextStage, rejectLabel, rejectsOf, sideProgress } from '@/state/selectors';
 import { propertyStyle } from '@/state/properties';
-import { STAGE_LABELS, stagePath, trackOf, trackPath, type PropertyDef, type RowFieldPath, type ShotRow, type ShotType } from '@/state/schema';
+import {
+  REJECT_KINDS,
+  REJECT_LABELS,
+  STAGE_LABELS,
+  stagePath,
+  trackOf,
+  trackPath,
+  type PropertyDef,
+  type RowFieldPath,
+  type ShotRow,
+  type ShotType,
+} from '@/state/schema';
 import { stampTime } from '@/lib/format';
 import { useFileImport } from '@/components/grid/useFileImport';
 import { useProperties } from '@/components/ui/hooks';
@@ -146,13 +157,18 @@ function PropertySection({ row, prop, hotkey }: { row: ShotRow; prop: PropertyDe
   const next = nextStage(row, side);
   const { done, total } = sideProgress(row, side);
   const p = trackOf(row, side);
+  const rejects = rejectsOf(row, side);
   const text = (path: RowFieldPath, value: string) => setField(row.id, path, value, { typing: true });
 
   return (
-    <section className="property-section" style={propertyStyle(prop.color) as CSSProperties}>
+    <section className={`property-section ${rejects.length ? 'property-rejected' : ''}`} style={propertyStyle(prop.color) as CSSProperties}>
       <header>
         <h3>{prop.name}</h3>
-        <span className={`status-text ${next ? '' : 'status-complete'}`}>{next ? `Waiting on ${STAGE_LABELS[next]}` : 'Complete'}</span>
+        {rejects.length ? (
+          <span className="status-text reject-text">On {rejectLabel(rejects)}</span>
+        ) : (
+          <span className={`status-text ${next ? '' : 'status-complete'}`}>{next ? `Waiting on ${STAGE_LABELS[next]}` : 'Complete'}</span>
+        )}
         <span className="muted small">
           {done}/{total}
         </span>
@@ -202,6 +218,25 @@ function PropertySection({ row, prop, hotkey }: { row: ShotRow; prop: PropertyDe
           );
         })}
       </ul>
+      <div className="reject-toggles">
+        {REJECT_KINDS.map((kind) => {
+          const on = p[kind];
+          const stamp = row.fieldTimes[trackPath(side, kind)];
+          return (
+            <button
+              key={kind}
+              type="button"
+              className={`reject-toggle ${on ? 'reject-toggle-on' : ''}`}
+              aria-pressed={on}
+              title={stamp?.u ? `${on ? 'Set' : 'Cleared'} by ${stamp.u} · ${stampTime(stamp.t)}` : undefined}
+              onClick={() => setField(row.id, trackPath(side, kind), !on)}
+            >
+              <span className="check-box">{on ? '✕' : ''}</span>
+              {REJECT_LABELS[kind]}
+            </button>
+          );
+        })}
+      </div>
       {row.shotType === 'longshot' && <p className="muted small">Longshot — assembly, submission and approval don't apply.</p>}
     </section>
   );

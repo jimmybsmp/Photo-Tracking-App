@@ -1,8 +1,8 @@
 import { memo, type CSSProperties } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
-import { activeSides, applicableStages, openConcerns } from '@/state/selectors';
+import { activeSides, applicableStages, isRejected, openConcerns, rejectsOf } from '@/state/selectors';
 import { propertyStyle } from '@/state/properties';
-import { PIPELINE_STAGES, STAGE_LABELS, stagePath, trackOf, trackPath, type PropertyDef, type RowFieldPath, type ShotType } from '@/state/schema';
+import { PIPELINE_STAGES, REJECT_KINDS, REJECT_LABELS, STAGE_LABELS, stagePath, trackOf, trackPath, type PropertyDef, type RowFieldPath, type ShotType } from '@/state/schema';
 import { ROW_DRAG_TYPE } from '@/components/grid/PhotoTile';
 import { useProperties } from '@/components/ui/hooks';
 
@@ -31,6 +31,7 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
   const active = activeSides(row, properties);
   const live = properties.filter((p) => active.includes(p.id));
   const concerns = openConcerns(row).length;
+  const rejected = isRejected(row, properties);
   const text = (path: RowFieldPath, value: string) => setField(rowId, path, value, { typing: true });
 
   const perSide = (render: (prop: PropertyDef) => JSX.Element) =>
@@ -38,7 +39,11 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
       <span className="muted">—</span>
     ) : (
       live.map((prop) => (
-        <div key={prop.id} className="split" style={propertyStyle(prop.color) as CSSProperties}>
+        <div
+          key={prop.id}
+          className={`split ${rejectsOf(row, prop.id).length ? 'split-rejected' : ''}`}
+          style={propertyStyle(prop.color) as CSSProperties}
+        >
           {render(prop)}
         </div>
       ))
@@ -46,7 +51,7 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
 
   return (
     <tr
-      className={`sheet-row ${selected ? 'sheet-row-selected' : ''}`}
+      className={`sheet-row ${selected ? 'sheet-row-selected' : ''} ${rejected ? 'sheet-row-rejected' : ''}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
@@ -75,8 +80,9 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
           {thumbUrl ? <img className="sheet-thumb" src={thumbUrl} alt="" onClick={() => openRow(rowId)} /> : <span className="muted">—</span>}
         </td>
       )}
-      <td>
-        <input className="cell" value={row.shotNum} placeholder="Shot #" onChange={(e) => text('shotNum', e.target.value)} />
+      <td className="shot-cell">
+        <input className="cell cell-shot" value={row.shotNum} placeholder="Shot #" onChange={(e) => text('shotNum', e.target.value)} />
+        {rejected && <div className="reject-text cell-sub">On reject</div>}
         {row.elvisName && row.elvisName !== row.shotNum && <div className="cell-sub">{row.elvisName}</div>}
       </td>
       <td>
@@ -145,6 +151,22 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
               <span className="stage-cell stage-cell-skip" />
             ),
           )}
+        </td>
+      ))}
+      {REJECT_KINDS.map((kind) => (
+        <td key={kind} className="center">
+          {perSide(({ id: side, name }) => {
+            const on = trackOf(row, side)[kind];
+            return (
+              <button
+                className={`reject-cell ${on ? 'reject-cell-on' : ''}`}
+                title={`${on ? 'Clear' : 'Mark'} ${REJECT_LABELS[kind]} — ${name}${row.fieldTimes[trackPath(side, kind)]?.u ? ` · ${row.fieldTimes[trackPath(side, kind)]?.u}` : ''}`}
+                onClick={() => setField(rowId, trackPath(side, kind), !on)}
+              >
+                {on ? 'REJECT' : ''}
+              </button>
+            );
+          })}
         </td>
       ))}
       <td className="no-print center">

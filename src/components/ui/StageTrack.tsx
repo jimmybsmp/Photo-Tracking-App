@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { applicableStages, nextStage } from '@/state/selectors';
+import { applicableStages, nextStage, rejectLabel, rejectsOf } from '@/state/selectors';
 import { propertyStyle } from '@/state/properties';
 import { STAGE_LABELS, trackOf, type PropertyDef, type ShotRow } from '@/state/schema';
 
@@ -12,6 +12,7 @@ export function StageTrack({ row, prop, compact = false }: { row: ShotRow; prop:
   const stages = applicableStages(row);
   const next = nextStage(row, prop.id);
   const pipeline = trackOf(row, prop.id).pipeline;
+  const rejects = rejectsOf(row, prop.id);
   return (
     <div className={`track ${compact ? 'track-compact' : ''}`} style={propertyStyle(prop.color) as CSSProperties}>
       <span className="track-label" title={prop.name}>
@@ -26,7 +27,12 @@ export function StageTrack({ row, prop, compact = false }: { row: ShotRow; prop:
           />
         ))}
       </span>
-      {!compact && <span className={`track-status ${next ? '' : 'track-status-complete'}`}>{next ? STAGE_LABELS[next] : 'Complete'}</span>}
+      {!compact &&
+        (rejects.length ? (
+          <span className="track-status reject-text">{rejectLabel(rejects)}</span>
+        ) : (
+          <span className={`track-status ${next ? '' : 'track-status-complete'}`}>{next ? STAGE_LABELS[next] : 'Complete'}</span>
+        ))}
     </div>
   );
 }

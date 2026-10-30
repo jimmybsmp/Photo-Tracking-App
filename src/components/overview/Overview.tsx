@@ -69,6 +69,7 @@ export function Overview({ onImport }: { onImport: () => void }) {
       <section className="kpis">
         <Kpi label="Shots" value={stats.total} onClick={() => showShots({})} />
         <Kpi label="Complete" value={`${stats.complete}`} sub={`${pct(stats.complete, stats.total)}%`} tone="good" onClick={() => showShots({ waitingOn: 'complete' })} />
+        <Kpi label="On reject" value={stats.rejected} tone={stats.rejected ? 'bad' : undefined} onClick={() => showShots({ attention: 'rejected' })} />
         <Kpi label="Open concerns" value={stats.openConcerns} tone={stats.openConcerns ? 'warn' : undefined} onClick={() => showShots({ attention: 'concerns' })} />
         <Kpi label="In more than one property" value={stats.shared} onClick={() => showShots({ property: 'shared' })} />
         <Kpi label="Not assigned yet" value={stats.unassignedUsage} tone={stats.unassignedUsage ? 'warn' : undefined} onClick={() => showShots({ property: 'none' })} />
@@ -216,7 +217,7 @@ function SyncLine() {
   );
 }
 
-function Kpi({ label, value, sub, tone, onClick }: { label: string; value: number | string; sub?: string; tone?: 'good' | 'warn'; onClick: () => void }) {
+function Kpi({ label, value, sub, tone, onClick }: { label: string; value: number | string; sub?: string; tone?: 'good' | 'warn' | 'bad'; onClick: () => void }) {
   return (
     <button className={`kpi ${tone ? `kpi-${tone}` : ''}`} onClick={onClick}>
       <span className="kpi-value">
@@ -253,6 +254,7 @@ function PropertyCard({
         {stats.complete} of {stats.shots} shots complete
         {stats.stalled ? ` · ${stats.stalled} retouched, waiting on QC` : ''}
       </p>
+      {stats.rejected > 0 && <p className="reject-text">{stats.rejected} on reject</p>}
       <ul className="stage-funnel">
         {PIPELINE_STAGES.map((stage) => {
           const c = stats.stages[stage];
@@ -276,6 +278,7 @@ function PropertyCard({
 }
 
 const KIND_LABEL: Record<AttentionItem['kind'], string> = {
+  reject: 'Reject',
   concern: 'Concern',
   stalled: 'Stalled',
   'no-usage': 'No property',

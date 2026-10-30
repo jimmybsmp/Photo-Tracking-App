@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
-import { activeSides, openConcerns } from '@/state/selectors';
+import { activeSides, isRejected, openConcerns } from '@/state/selectors';
 import { StageTrack } from '@/components/ui/StageTrack';
 import { useProperties } from '@/components/ui/hooks';
 
@@ -32,11 +32,12 @@ function PhotoTileImpl({ rowId, onDropFiles }: { rowId: string; onDropFiles: (ro
   if (!row) return null;
   const sides = activeSides(row, properties);
   const concerns = openConcerns(row).length;
+  const rejected = isRejected(row, properties);
   const width = Math.round(200 * zoom);
 
   return (
     <div
-      className={['tile', selected && 'tile-selected', active && 'tile-active', over && 'tile-drop'].filter(Boolean).join(' ')}
+      className={['tile', selected && 'tile-selected', active && 'tile-active', over && 'tile-drop', rejected && 'tile-rejected'].filter(Boolean).join(' ')}
       style={{ width }}
       onClick={(e) => {
         // A plain click opens the shot; selecting for batch changes is
@@ -67,6 +68,7 @@ function PhotoTileImpl({ rowId, onDropFiles }: { rowId: string; onDropFiles: (ro
         <label className="tile-check" onClick={(e) => e.stopPropagation()} title="Select for batch changes">
           <input type="checkbox" checked={selected} onChange={() => toggleSelect(rowId)} />
         </label>
+        {rejected && <span className="tile-reject">Reject</span>}
         {concerns > 0 && (
           <span className="tile-concerns" title={`${concerns} open concern${concerns === 1 ? '' : 's'}`}>
             {concerns}

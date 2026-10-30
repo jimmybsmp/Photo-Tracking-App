@@ -37,7 +37,12 @@ import { newId } from '@/lib/compat';
  * stored stamp stays valid; `usage` becomes `mag.on` / `pr.on`.
  */
 
-export const SCHEMA_VERSION = 4;
+/*
+ * Version 5: each track can be on a QC reject and/or an office reject
+ * (`qcReject`, `officeReject`). Additive — a v4 track reads as not rejected.
+ */
+
+export const SCHEMA_VERSION = 5;
 
 /* ------------------------------------------------------------------ *
  * Pipeline
@@ -90,13 +95,22 @@ export interface Placement {
 /** A shot's track in one property. `on` says whether the shot runs there. */
 export interface Track extends Placement {
   on: boolean;
+  /** Sent back by QC. Flagged in bold red everywhere until someone clears it. */
+  qcReject: boolean;
+  /** Sent back by the office. Same treatment, its own flag. */
+  officeReject: boolean;
 }
+
+/** The two ways a shot gets sent back, each its own flag on each track. */
+export const REJECT_KINDS = ['qcReject', 'officeReject'] as const;
+export type RejectKind = (typeof REJECT_KINDS)[number];
+export const REJECT_LABELS: Record<RejectKind, string> = { qcReject: 'QC reject', officeReject: 'Office reject' };
 
 export function emptyPlacement(): Placement {
   return { position: '', selectType: 'main', retoucher: '', pipeline: emptyPipeline() };
 }
 
-export const emptyTrack = (): Track => ({ ...emptyPlacement(), on: false });
+export const emptyTrack = (): Track => ({ ...emptyPlacement(), on: false, qcReject: false, officeReject: false });
 
 /* ------------------------------------------------------------------ *
  * Properties — where shots run
@@ -198,6 +212,8 @@ export const TRACK_FIELD_PATHS = [
   'position',
   'selectType',
   'retoucher',
+  'qcReject',
+  'officeReject',
   ...PIPELINE_STAGES.map((stage) => `pipeline.${stage}` as const),
 ] as const;
 export type TrackFieldPath = (typeof TRACK_FIELD_PATHS)[number];
@@ -334,8 +350,8 @@ export function setRowField(row: ShotRow, path: RowFieldPath, value: unknown): S
   let next: Track;
   if (parsed.field.startsWith('pipeline.')) {
     next = { ...track, pipeline: { ...track.pipeline, [parsed.field.slice(9)]: normalizeStage(value) } };
-  } else if (parsed.field === 'on') {
-    next = { ...track, on: normalizeStage(value) };
+  } else if (parsed.field === 'on' || parsed.field === 'qcReject' || parsed.field === 'officeReject') {
+    next = { ...track, [parsed.field]: normalizeStage(value) };
   } else if (parsed.field === 'selectType') {
     next = { ...track, selectType: value === 'alt' ? 'alt' : 'main' };
   } else {
@@ -364,6 +380,8 @@ export function normalizeRow(raw: unknown, fallbackId?: string): ShotRow {
     for (const stage of PIPELINE_STAGES) pipeline[stage] = normalizeStage(src.pipeline?.[stage]);
     return {
       on,
+      qcReject: normalizeStage(src.qcReject),
+      officeReject: normalizeStage(src.officeReject),
       position: String(src.position ?? ''),
       selectType: src.selectType === 'alt' ? 'alt' : 'main',
       retoucher: String(src.retoucher ?? ''),

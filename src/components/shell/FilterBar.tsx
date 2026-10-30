@@ -55,6 +55,7 @@ export function FilterBar({ shown, total, children }: { shown: number; total: nu
       ])}
       {select('attention', [
         ['all', 'Everything'],
+        ['rejected', 'On a reject'],
         ['concerns', 'Open concerns'],
         ['any', 'Needs attention'],
       ])}

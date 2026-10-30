@@ -29,6 +29,11 @@ same build split, same reasons for both.
   old stamp stays valid. Rows written to files and deltas also carry the v3
   `mag`/`pr`/`usage` fields (`withLegacyFields`) so a site still on 0.4 reads
   them instead of blanks.
+- **Rejects are flags, not stages.** Each track has `qcReject` and
+  `officeReject` (`REJECT_KINDS`). Setting one never unticks a stage;
+  `isSideComplete` is false while either is set, and `rejectsOf()` /
+  `isRejected()` are how views ask. Anything on a reject is drawn in the
+  `--reject` red, bold.
 - **A display decision never discards data.** Taking a shot out of a
   property, hiding a property, or switching a shot to longshot must never
   clear a track's position, retoucher, or stages. A longshot's assembled/submitted/approved

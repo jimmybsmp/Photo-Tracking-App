@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { activeSides, computeStats, matchesFilters } from '@/state/selectors';
-import { PIPELINE_STAGES, STAGE_LABELS, trackOf, type PropertyDef, type ShotRow } from '@/state/schema';
+import { PIPELINE_STAGES, REJECT_KINDS, REJECT_LABELS, STAGE_LABELS, trackOf, type PropertyDef, type ShotRow } from '@/state/schema';
 import { FilterBar } from '@/components/shell/FilterBar';
 import { useProperties } from '@/components/ui/hooks';
 import { pct } from '@/lib/format';
@@ -86,6 +86,7 @@ export function TrackerSheet() {
                 return (
                   <div key={prop.id} className="sheet-summary-side">
                     <strong>{prop.name}</strong> {s.complete}/{s.shots} complete ({pct(s.complete, s.shots)}%)
+                    {s.rejected > 0 && <span className="reject-text"> · {s.rejected} on reject</span>}
                     <span className="sheet-summary-stages">
                       {PIPELINE_STAGES.map((stage) => `${STAGE_LABELS[stage]} ${s.stages[stage].done}/${s.stages[stage].eligible}`).join(' · ')}
                     </span>
@@ -117,6 +118,11 @@ export function TrackerSheet() {
                 </th>
                 {PIPELINE_STAGES.map((stage) => (
                   <th key={stage}>{STAGE_LABELS[stage]}</th>
+                ))}
+                {REJECT_KINDS.map((kind) => (
+                  <th key={kind} className="reject-head">
+                    {REJECT_LABELS[kind]}
+                  </th>
                 ))}
                 <th className="no-print" />
               </tr>

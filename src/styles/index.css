@@ -45,6 +45,10 @@
   --warn: #f59e0b;
   --warn-wash: rgba(245, 158, 11, 0.14);
   --bad: #ef4444;
+  /* A reject: bold red, unmistakable on the white sheet and the dark chrome. */
+  --reject: #dc2626;
+  --reject-bright: #f87171;
+  --reject-wash: #fee2e2;
 
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
@@ -1209,6 +1213,14 @@ textarea.field {
 .kpi-warn .kpi-value {
   color: var(--warn);
 }
+.kpi-bad {
+  border-color: var(--reject);
+}
+.kpi-bad .kpi-value,
+.kpi-bad .kpi-label {
+  color: var(--reject-bright);
+  font-weight: 900;
+}
 .property-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
@@ -1969,4 +1981,111 @@ textarea.field {
 .run-tag-off:hover {
   color: var(--prop-ink);
   border-color: var(--prop);
+}
+
+
+/* --- rejects: bold red wherever a shot is on one ---------------------------- */
+
+.reject-text {
+  color: var(--reject);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+/* On the dark chrome the same red is too dark to read. */
+.inspector .reject-text,
+.overview .reject-text,
+.panel .reject-text {
+  color: var(--reject-bright);
+}
+.tile-rejected {
+  border: 2px solid var(--reject);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.35);
+}
+.tile-reject {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--reject);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.property-rejected {
+  outline: 2px solid var(--reject);
+  outline-offset: -1px;
+}
+.reject-toggles {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.reject-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--chrome-600);
+  background: var(--chrome-850);
+  color: var(--chrome-200);
+  font-weight: 600;
+}
+.reject-toggle:hover {
+  border-color: var(--reject-bright);
+}
+.reject-toggle-on {
+  background: var(--reject);
+  border-color: var(--reject);
+  color: #fff;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.reject-toggle-on .check-box {
+  border-color: #fff;
+  color: #fff;
+}
+.reject-head {
+  color: #fecaca;
+}
+.reject-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 24px;
+  margin: 0 auto;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1.5px solid #e5b4b4;
+  background: var(--paper);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.reject-cell:hover {
+  border-color: var(--reject);
+}
+.reject-cell-on {
+  background: var(--reject);
+  border-color: var(--reject);
+  color: #fff;
+}
+.sheet-row-rejected td {
+  background: #fff5f5;
+}
+.sheet-row-rejected .shot-cell {
+  box-shadow: inset 4px 0 0 var(--reject);
+}
+.sheet-row-rejected .cell-shot {
+  color: var(--reject);
+  font-weight: 900;
+}
+.split-rejected {
+  background: var(--reject-wash);
+  border-radius: 3px;
 }

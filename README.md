@@ -12,6 +12,17 @@ Each property is tracked separately, every stage included: a magazine image
 is printed far larger than anything online and usually gets its own CMYK
 colour work and detail retouching.
 
+## Rejects
+
+Every property's track has two reject switches, **QC reject** and **Office
+reject**, on the shot and as the last two columns of the sheet. A shot on a
+reject is marked in bold red everywhere — its tile, its sheet row and shot
+number, its status, the overview's *On reject* count, and the top of *Needs
+attention* — and it isn't counted complete until the reject is cleared, however
+many stages are ticked. Ticked stages stay as they were. Who set or cleared a
+reject is recorded, and rejects travel between sites like any other change.
+The *On a reject* filter lists every shot on one.
+
 ## Properties
 
 A project starts with **Magazine** and **Press release**. Add more under File
