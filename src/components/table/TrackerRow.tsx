@@ -1,15 +1,17 @@
-import { memo } from 'react';
+import { memo, type CSSProperties } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
-import { applicableStages, openConcerns } from '@/state/selectors';
-import { PIPELINE_STAGES, STAGE_LABELS, stagePath, type RowFieldPath, type ShotType, type Side, type Usage } from '@/state/schema';
+import { activeSides, applicableStages, openConcerns } from '@/state/selectors';
+import { propertyStyle } from '@/state/properties';
+import { PIPELINE_STAGES, STAGE_LABELS, stagePath, trackOf, trackPath, type PropertyDef, type RowFieldPath, type ShotType } from '@/state/schema';
 import { ROW_DRAG_TYPE } from '@/components/grid/PhotoTile';
+import { useProperties } from '@/components/ui/hooks';
 
 /**
  * One line of the printed sheet — editable, for anyone who prefers typing
  * across a row to the grid's click-to-inspect flow.
  *
- * A shot in both properties shows two lines of stage cells, magazine above
- * press release. A longshot's assembled/submitted/approved cells are empty:
+ * A shot in several properties shows a line of cells per property, in the
+ * project's order. A longshot's assembled/submitted/approved cells are empty:
  * those stages don't apply to it. Only the ⋮⋮ handle drags.
  */
 function TrackerRowImpl({ rowId }: { rowId: string }) {
@@ -22,19 +24,29 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
   const toggleSelect = useTrackerStore((s) => s.toggleSelect);
   const reorderRow = useTrackerStore((s) => s.reorderRow);
   const openRow = useTrackerStore((s) => s.openRow);
+  const properties = useProperties();
 
   if (!row) return null;
   const stages = applicableStages(row);
-  const sides: Side[] = row.usage === 'both' ? ['mag', 'pr'] : row.usage === 'mag' ? ['mag'] : row.usage === 'pr' ? ['pr'] : [];
+  const active = activeSides(row, properties);
+  const live = properties.filter((p) => active.includes(p.id));
   const concerns = openConcerns(row).length;
   const text = (path: RowFieldPath, value: string) => setField(rowId, path, value, { typing: true });
 
-  const perSide = (render: (side: Side) => JSX.Element) =>
-    sides.length === 0 ? <span className="muted">—</span> : sides.map((side) => <div key={side} className={`split split-${side}`}>{render(side)}</div>);
+  const perSide = (render: (prop: PropertyDef) => JSX.Element) =>
+    live.length === 0 ? (
+      <span className="muted">—</span>
+    ) : (
+      live.map((prop) => (
+        <div key={prop.id} className="split" style={propertyStyle(prop.color) as CSSProperties}>
+          {render(prop)}
+        </div>
+      ))
+    );
 
   return (
     <tr
-      className={`sheet-row usage-${row.usage} ${selected ? 'sheet-row-selected' : ''}`}
+      className={`sheet-row ${selected ? 'sheet-row-selected' : ''}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
@@ -75,49 +87,59 @@ function TrackerRowImpl({ rowId }: { rowId: string }) {
         </select>
       </td>
       <td>
-        <select className="cell" value={row.usage} onChange={(e) => setField(rowId, 'usage', e.target.value as Usage)}>
-          <option value="none">—</option>
-          <option value="mag">Magazine</option>
-          <option value="pr">Press release</option>
-          <option value="both">Both</option>
-        </select>
+        <div className="runs-in-cell">
+          {properties.map((prop) => {
+            const on = active.includes(prop.id);
+            return (
+              <button
+                key={prop.id}
+                className={`track-label run-tag ${on ? 'run-tag-on' : 'run-tag-off no-print'}`}
+                style={propertyStyle(prop.color) as CSSProperties}
+                title={`${on ? 'Take out of' : 'Add to'} ${prop.name}`}
+                onClick={() => setField(rowId, trackPath(prop.id, 'on'), !on)}
+              >
+                {prop.short}
+              </button>
+            );
+          })}
+        </div>
       </td>
       <td>
-        {perSide((side) => (
+        {perSide((prop) => (
           <>
-            {row.usage === 'both' && <span className={`track-label track-label-${side}`}>{side === 'mag' ? 'MAG' : 'PR'}</span>}
+            {live.length > 1 && <span className="track-label">{prop.short}</span>}
             <input
               className="cell"
-              value={row[side].position}
-              placeholder={side === 'mag' ? 'Spread' : 'Slide'}
-              onChange={(e) => text(`${side}.position` as RowFieldPath, e.target.value)}
+              value={trackOf(row, prop.id).position}
+              placeholder={prop.positionLabel.replace(/\s*#$/, '')}
+              onChange={(e) => text(trackPath(prop.id, 'position'), e.target.value)}
             />
           </>
         ))}
       </td>
       <td>
-        {perSide((side) => (
-          <select className="cell" value={row[side].selectType} onChange={(e) => setField(rowId, `${side}.selectType` as RowFieldPath, e.target.value)}>
+        {perSide(({ id: side }) => (
+          <select className="cell" value={trackOf(row, side).selectType} onChange={(e) => setField(rowId, trackPath(side, 'selectType'), e.target.value)}>
             <option value="main">Main</option>
             <option value="alt">Alt</option>
           </select>
         ))}
       </td>
       <td>
-        {perSide((side) => (
-          <input className="cell" value={row[side].retoucher} placeholder="—" onChange={(e) => text(`${side}.retoucher` as RowFieldPath, e.target.value)} />
+        {perSide(({ id: side }) => (
+          <input className="cell" value={trackOf(row, side).retoucher} placeholder="—" onChange={(e) => text(trackPath(side, 'retoucher'), e.target.value)} />
         ))}
       </td>
       {PIPELINE_STAGES.map((stage) => (
         <td key={stage} className="center">
-          {perSide((side) =>
+          {perSide(({ id: side }) =>
             stages.includes(stage) ? (
               <button
-                className={`stage-cell ${row[side].pipeline[stage] ? 'stage-cell-done' : ''}`}
+                className={`stage-cell ${trackOf(row, side).pipeline[stage] ? 'stage-cell-done' : ''}`}
                 title={`${STAGE_LABELS[stage]} — ${row.fieldTimes[stagePath(side, stage)]?.u ?? ''}`}
                 onClick={() => toggleStage(rowId, side, stage)}
               >
-                {row[side].pipeline[stage] ? '✓' : ''}
+                {trackOf(row, side).pipeline[stage] ? '✓' : ''}
               </button>
             ) : (
               <span className="stage-cell stage-cell-skip" />

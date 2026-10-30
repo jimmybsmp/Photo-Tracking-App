@@ -3,16 +3,20 @@ import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { filtersActive, type Filters } from '@/state/selectors';
 import { PIPELINE_STAGES, STAGE_LABELS } from '@/state/schema';
+import { useProperties } from '@/components/ui/hooks';
 
 /**
  * Filters shared by the Shots grid and the Sheet. Stage and select filters
  * follow the property filter: "Magazine + waiting on QC" means shots whose
- * *magazine* track is at QC, whatever the press-release side is doing.
+ * *magazine* track is at QC, whatever their other properties are doing.
  */
 export function FilterBar({ shown, total, children }: { shown: number; total: number; children?: ReactNode }) {
   const filters = useTrackerStore(useShallow((s) => s.filters));
   const setFilters = useTrackerStore((s) => s.setFilters);
   const resetFilters = useTrackerStore((s) => s.resetFilters);
+  const properties = useProperties();
+  // A filter on a property since hidden shows as "All properties" rather than nothing.
+  const propertyValue = ['all', 'shared', 'none'].includes(filters.property) || properties.some((p) => p.id === filters.property) ? filters.property : 'all';
 
   const select = <K extends keyof Filters>(key: K, options: Array<[Filters[K], string]>) => (
     <select
@@ -30,13 +34,20 @@ export function FilterBar({ shown, total, children }: { shown: number; total: nu
 
   return (
     <div className="filterbar no-print">
-      {select('property', [
-        ['all', 'All properties'],
-        ['mag', 'Magazine'],
-        ['pr', 'Press release'],
-        ['both', 'In both'],
-        ['none', 'No usage set'],
-      ])}
+      <select
+        className={`field field-select ${propertyValue !== 'all' ? 'field-active' : ''}`}
+        value={propertyValue}
+        onChange={(e) => setFilters({ property: e.target.value })}
+      >
+        <option value="all">All properties</option>
+        {properties.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+        <option value="shared">In more than one</option>
+        <option value="none">Not assigned yet</option>
+      </select>
       {select('waitingOn', [
         ['all', 'Any stage'],
         ...PIPELINE_STAGES.map((s) => [s, `Waiting on ${STAGE_LABELS[s]}`] as [Filters['waitingOn'], string]),

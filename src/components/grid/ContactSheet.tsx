@@ -3,6 +3,7 @@ import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { matchesFilters } from '@/state/selectors';
 import { FilterBar } from '@/components/shell/FilterBar';
+import { useProperties } from '@/components/ui/hooks';
 import { PhotoTile } from './PhotoTile';
 import { BatchBar } from './BatchBar';
 import { useFileImport } from './useFileImport';
@@ -28,7 +29,11 @@ export function ContactSheet() {
   // a fresh arrow here made every edit redraw every tile on the sheet.
   const dropInto = useCallback((rowId: string, files: FileList) => void importInto(rowId, files[0]), [importInto]);
 
-  const visible = useMemo(() => rowIds.filter((id) => rows[id] && matchesFilters(rows[id], filters)), [rowIds, rows, filters]);
+  const properties = useProperties();
+  const visible = useMemo(
+    () => rowIds.filter((id) => rows[id] && matchesFilters(rows[id], filters, properties)),
+    [rowIds, rows, filters, properties],
+  );
 
   return (
     <div className="view-col">

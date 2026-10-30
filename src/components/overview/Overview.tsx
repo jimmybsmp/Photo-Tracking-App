@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, type CSSProperties } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import {
+  activeSides,
   attentionItems,
   computeStats,
   defaultFilters,
@@ -9,11 +10,13 @@ import {
   type AttentionItem,
   type SideStats,
 } from '@/state/selectors';
-import { PIPELINE_STAGES, SIDE_LABELS, STAGE_LABELS, type PipelineStage, type Side, type TrackerDocument } from '@/state/schema';
+import { PIPELINE_STAGES, STAGE_LABELS, type PipelineStage, type PropertyDef, type TrackerDocument } from '@/state/schema';
+import { propertyStyle } from '@/state/properties';
+import { useUiStore } from '@/state/ui';
 import { useSyncStore } from '@/lib/elvis/autoSync';
 import { pct, timeAgo } from '@/lib/format';
 import { StageTrack } from '@/components/ui/StageTrack';
-import { useNow } from '@/components/ui/hooks';
+import { useNow, useProperties } from '@/components/ui/hooks';
 
 /**
  * The executive view: where the whole shoot stands, per property, and what
@@ -26,12 +29,14 @@ export function Overview({ onImport }: { onImport: () => void }) {
   const setView = useTrackerStore((s) => s.setView);
   const openRow = useTrackerStore((s) => s.openRow);
   const now = useNow(30_000);
+  const properties = useProperties();
+  const openProperties = useUiStore((s) => s.openProperties);
 
   const stats = useMemo(() => computeStats(doc), [doc]);
   const attention = useMemo(() => attentionItems(doc), [doc]);
   const workload = useMemo(() => retoucherWorkload(doc), [doc]);
   const activity = useMemo(() => recentActivity(doc, 14), [doc]);
-  const shared = useMemo(() => doc.rowIds.filter((id) => doc.rows[id]?.usage === 'both'), [doc]);
+  const shared = useMemo(() => doc.rowIds.filter((id) => doc.rows[id] && activeSides(doc.rows[id], properties).length > 1), [doc, properties]);
 
   const showShots = (patch: Partial<typeof defaultFilters>) => {
     setFilters({ ...defaultFilters, ...patch });
@@ -65,15 +70,26 @@ export function Overview({ onImport }: { onImport: () => void }) {
         <Kpi label="Shots" value={stats.total} onClick={() => showShots({})} />
         <Kpi label="Complete" value={`${stats.complete}`} sub={`${pct(stats.complete, stats.total)}%`} tone="good" onClick={() => showShots({ waitingOn: 'complete' })} />
         <Kpi label="Open concerns" value={stats.openConcerns} tone={stats.openConcerns ? 'warn' : undefined} onClick={() => showShots({ attention: 'concerns' })} />
-        <Kpi label="In both properties" value={stats.shared} onClick={() => showShots({ property: 'both' })} />
-        <Kpi label="No usage set" value={stats.unassignedUsage} tone={stats.unassignedUsage ? 'warn' : undefined} onClick={() => showShots({ property: 'none' })} />
+        <Kpi label="In more than one property" value={stats.shared} onClick={() => showShots({ property: 'shared' })} />
+        <Kpi label="Not assigned yet" value={stats.unassignedUsage} tone={stats.unassignedUsage ? 'warn' : undefined} onClick={() => showShots({ property: 'none' })} />
       </section>
 
       <section className="property-cards">
-        {(['mag', 'pr'] as Side[]).map((side) => (
-          <PropertyCard key={side} side={side} stats={stats.sides[side]} onStage={(stage) => showShots({ property: side, waitingOn: stage })} onAll={() => showShots({ property: side })} />
+        {properties.map((p) => (
+          <PropertyCard
+            key={p.id}
+            prop={p}
+            stats={stats.sides[p.id]}
+            onStage={(stage) => showShots({ property: p.id, waitingOn: stage })}
+            onAll={() => showShots({ property: p.id })}
+          />
         ))}
       </section>
+      <div className="property-cards-foot">
+        <button className="link-btn small" onClick={openProperties}>
+          Add or change properties…
+        </button>
+      </div>
 
       <div className="overview-columns">
         <section className="panel">
@@ -93,10 +109,10 @@ export function Overview({ onImport }: { onImport: () => void }) {
 
         <section className="panel">
           <h2>
-            Shared between magazine &amp; press release <span className="count">{shared.length}</span>
+            Running in more than one property <span className="count">{shared.length}</span>
           </h2>
           {shared.length === 0 ? (
-            <p className="muted">No shot is set to run in both yet.</p>
+            <p className="muted">No shot runs in more than one property yet.</p>
           ) : (
             <table className="shared-table">
               <tbody>
@@ -109,10 +125,13 @@ export function Overview({ onImport }: { onImport: () => void }) {
                       </td>
                       <td className="shared-name">{row.shotNum || row.elvisName || '—'}</td>
                       <td>
-                        <StageTrack row={row} side="mag" />
-                      </td>
-                      <td>
-                        <StageTrack row={row} side="pr" />
+                        <div className="shared-tracks">
+                          {properties
+                            .filter((p) => row.tracks[p.id]?.on)
+                            .map((p) => (
+                              <StageTrack key={p.id} row={row} prop={p} />
+                            ))}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -210,21 +229,21 @@ function Kpi({ label, value, sub, tone, onClick }: { label: string; value: numbe
 }
 
 function PropertyCard({
-  side,
+  prop,
   stats,
   onStage,
   onAll,
 }: {
-  side: Side;
+  prop: PropertyDef;
   stats: SideStats;
   onStage: (stage: PipelineStage) => void;
   onAll: () => void;
 }) {
   const percent = pct(stats.complete, stats.shots);
   return (
-    <div className={`property-card property-${side}`}>
+    <div className="property-card" style={propertyStyle(prop.color) as CSSProperties}>
       <button className="property-head" onClick={onAll}>
-        <span className="property-name">{SIDE_LABELS[side]}</span>
+        <span className="property-name">{prop.name}</span>
         <span className="property-percent">{stats.shots ? `${percent}%` : '—'}</span>
       </button>
       <div className="bar bar-lg">
@@ -239,7 +258,7 @@ function PropertyCard({
           const c = stats.stages[stage];
           const waiting = stats.waiting[stage];
           return (
-            <li key={stage} onClick={() => onStage(stage)} title={`Show ${SIDE_LABELS[side].toLowerCase()} shots waiting on ${STAGE_LABELS[stage]}`}>
+            <li key={stage} onClick={() => onStage(stage)} title={`Show ${prop.name} shots waiting on ${STAGE_LABELS[stage]}`}>
               <span className="funnel-name">{STAGE_LABELS[stage]}</span>
               <span className="bar">
                 <span className="bar-fill" style={{ width: `${pct(c.done, c.eligible)}%` }} />
@@ -259,7 +278,7 @@ function PropertyCard({
 const KIND_LABEL: Record<AttentionItem['kind'], string> = {
   concern: 'Concern',
   stalled: 'Stalled',
-  'no-usage': 'No usage',
+  'no-usage': 'No property',
   'no-retoucher': 'Unassigned',
 };
 

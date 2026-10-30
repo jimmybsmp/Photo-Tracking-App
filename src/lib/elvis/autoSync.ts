@@ -147,6 +147,7 @@ function addSummary(into: MergeSummary, from: MergeSummary) {
   into.fieldsChanged += from.fieldsChanged;
   into.commentsChanged += from.commentsChanged;
   into.headerChanged = into.headerChanged || from.headerChanged;
+  into.propertiesChanged += from.propertiesChanged;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -202,6 +203,7 @@ async function cycle(): Promise<void> {
     if (summary.rowsAdded) notes.unshift(plural(summary.rowsAdded, 'new shot'));
     if (summary.rowsUpdated) notes.unshift(`${plural(summary.rowsUpdated, 'shot')} updated by others`);
     if (summary.rowsDeleted) notes.push(`${plural(summary.rowsDeleted, 'shot')} removed`);
+    if (summary.propertiesChanged) notes.push(`${plural(summary.propertiesChanged, 'property', 'properties')} added or changed`);
 
     useSyncStore.setState({
       status: problem ? 'error' : 'idle',

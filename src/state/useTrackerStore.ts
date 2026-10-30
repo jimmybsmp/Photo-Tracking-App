@@ -4,7 +4,8 @@ import { getDeviceId } from '@/lib/deviceId';
 import { getIdentity, stampNow } from '@/lib/identity';
 import { extractShotNumber } from '@/lib/images';
 import { resetHistory } from './history';
-import { defaultFilters, type Filters } from './selectors';
+import { activeSides, defaultFilters, type Filters } from './selectors';
+import { allProperties, newProperty, propertyList } from './properties';
 import {
   LONGSHOT_EXEMPT_STAGES,
   emptyDocument,
@@ -12,9 +13,12 @@ import {
   pruneUnusedAssets,
   stagePath,
   touchRowField,
+  trackOf,
+  trackPath,
   type AssetMeta,
   type CommentKind,
   type PipelineStage,
+  type PropertyDef,
   type RowFieldPath,
   type ShotComment,
   type ShotRow,
@@ -40,7 +44,8 @@ import {
  */
 
 export type ViewMode = 'overview' | 'shots' | 'sheet';
-export type SideTarget = Side | 'both';
+/** A batch change aims at one property, or at every property each shot runs in. */
+export type SideTarget = Side | 'active';
 
 /** The last edit, so history can fold a burst of typing into one undo step. */
 export interface LastEdit {
@@ -96,6 +101,16 @@ interface TrackerStore extends UiState {
   batchSetStage: (rowIds: string[], side: SideTarget, stage: PipelineStage, done: boolean) => void;
   batchSetRetoucher: (rowIds: string[], side: SideTarget, retoucher: string) => void;
   batchSetField: (rowIds: string[], path: RowFieldPath, value: unknown) => void;
+  /** Put shots in a property, or take them out — their track in it is kept either way. */
+  batchSetOn: (rowIds: string[], side: Side, on: boolean) => void;
+
+  /** Add a property; returns its id. */
+  addProperty: (name: string) => string;
+  updateProperty: (id: Side, patch: Partial<Pick<PropertyDef, 'name' | 'short' | 'color' | 'positionLabel'>>) => void;
+  /** Move a property up (-1) or down (+1) in the list. */
+  moveProperty: (id: Side, step: -1 | 1) => void;
+  /** Hide a property, or bring it back. Nothing in it is deleted. */
+  setPropertyArchived: (id: Side, archived: boolean) => void;
 
   setFilters: (patch: Partial<Filters>) => void;
   resetFilters: () => void;
@@ -112,7 +127,8 @@ interface TrackerStore extends UiState {
 const isExempt = (row: ShotRow, stage: PipelineStage) =>
   row.shotType === 'longshot' && LONGSHOT_EXEMPT_STAGES.includes(stage);
 
-const sidesOf = (target: SideTarget): Side[] => (target === 'both' ? ['mag', 'pr'] : [target]);
+const sidesOf = (row: ShotRow, target: SideTarget, properties: PropertyDef[]): Side[] =>
+  target === 'active' ? activeSides(row, properties) : [target];
 
 const uniqueEdit = (): LastEdit => ({ key: newId(), at: Date.now() });
 
@@ -301,13 +317,13 @@ export const useTrackerStore = create<TrackerStore>((set, get) => {
 
     setStage: (rowId, side, stage, done) =>
       updateRow(rowId, (row) => {
-        if (isExempt(row, stage) || row[side].pipeline[stage] === done) return row;
+        if (isExempt(row, stage) || trackOf(row, side).pipeline[stage] === done) return row;
         return touchRowField(row, stagePath(side, stage), done, stampNow());
       }),
 
     toggleStage: (rowId, side, stage) => {
       const row = get().doc.rows[rowId];
-      if (row) get().setStage(rowId, side, stage, !row[side].pipeline[stage]);
+      if (row) get().setStage(rowId, side, stage, !trackOf(row, side).pipeline[stage]);
     },
 
     addComment: (rowId, input) => {
@@ -347,10 +363,11 @@ export const useTrackerStore = create<TrackerStore>((set, get) => {
 
     batchSetStage: (rowIds, target, stage, done) => {
       const stamp = stampNow();
+      const properties = propertyList(get().doc.properties);
       updateRows(rowIds, (row) => {
         let next = row;
-        for (const side of sidesOf(target)) {
-          if (isExempt(row, stage) || next[side].pipeline[stage] === done) continue;
+        for (const side of sidesOf(row, target, properties)) {
+          if (isExempt(row, stage) || trackOf(next, side).pipeline[stage] === done) continue;
           next = touchRowField(next, stagePath(side, stage), done, stamp);
         }
         return next;
@@ -359,10 +376,11 @@ export const useTrackerStore = create<TrackerStore>((set, get) => {
 
     batchSetRetoucher: (rowIds, target, retoucher) => {
       const stamp = stampNow();
+      const properties = propertyList(get().doc.properties);
       updateRows(rowIds, (row) => {
         let next = row;
-        for (const side of sidesOf(target)) {
-          if (next[side].retoucher === retoucher) continue;
+        for (const side of sidesOf(row, target, properties)) {
+          if (trackOf(next, side).retoucher === retoucher) continue;
           next = touchRowField(next, `${side}.retoucher` as RowFieldPath, retoucher, stamp);
         }
         return next;
@@ -373,6 +391,62 @@ export const useTrackerStore = create<TrackerStore>((set, get) => {
       const stamp = stampNow();
       updateRows(rowIds, (row) => touchRowField(row, path, value, stamp));
     },
+
+    batchSetOn: (rowIds, side, on) => {
+      const stamp = stampNow();
+      updateRows(rowIds, (row) => (trackOf(row, side).on === on && row.tracks[side] ? row : touchRowField(row, trackPath(side, 'on'), on, stamp)));
+    },
+
+    addProperty: (name) => {
+      const property = newProperty(get().doc.properties, name, stampNow());
+      set((s) => ({
+        doc: { ...s.doc, properties: { ...s.doc.properties, [property.id]: property } },
+        revision: s.revision + 1,
+        lastEdit: uniqueEdit(),
+      }));
+      return property.id;
+    },
+
+    updateProperty: (id, patch) =>
+      set((s) => {
+        const current = s.doc.properties[id];
+        if (!current) return s;
+        const next = { ...current, ...patch, t: stampNow() };
+        if (patch.short !== undefined) next.short = patch.short.toUpperCase().slice(0, 6);
+        return {
+          doc: { ...s.doc, properties: { ...s.doc.properties, [id]: next } },
+          revision: s.revision + 1,
+          // Typing a name folds into one undo step, like any text field.
+          lastEdit: { key: `property:${id}:${Object.keys(patch).join(',')}`, at: Date.now() },
+        };
+      }),
+
+    moveProperty: (id, step) =>
+      set((s) => {
+        const list = allProperties(s.doc.properties);
+        const at = list.findIndex((p) => p.id === id);
+        const to = at + step;
+        if (at < 0 || to < 0 || to >= list.length) return s;
+        [list[at], list[to]] = [list[to], list[at]];
+        // Renumber the whole list, stamping only the definitions whose place changed.
+        const stamp = stampNow();
+        const properties = { ...s.doc.properties };
+        list.forEach((p, i) => {
+          if (p.order !== i) properties[p.id] = { ...p, order: i, t: stamp };
+        });
+        return { doc: { ...s.doc, properties }, revision: s.revision + 1, lastEdit: uniqueEdit() };
+      }),
+
+    setPropertyArchived: (id, archived) =>
+      set((s) => {
+        const current = s.doc.properties[id];
+        if (!current || current.archived === archived) return s;
+        return {
+          doc: { ...s.doc, properties: { ...s.doc.properties, [id]: { ...current, archived, t: stampNow() } } },
+          revision: s.revision + 1,
+          lastEdit: uniqueEdit(),
+        };
+      }),
 
     setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
     resetFilters: () => set({ filters: { ...defaultFilters } }),

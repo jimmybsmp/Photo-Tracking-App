@@ -1,19 +1,20 @@
 import { useMemo, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
-import { computeStats, matchesFilters } from '@/state/selectors';
-import { PIPELINE_STAGES, SIDE_LABELS, STAGE_LABELS, type ShotRow, type Side } from '@/state/schema';
+import { activeSides, computeStats, matchesFilters } from '@/state/selectors';
+import { PIPELINE_STAGES, STAGE_LABELS, trackOf, type PropertyDef, type ShotRow } from '@/state/schema';
 import { FilterBar } from '@/components/shell/FilterBar';
+import { useProperties } from '@/components/ui/hooks';
 import { pct } from '@/lib/format';
 import { TrackerRow } from './TrackerRow';
 
-type SortKey = 'order' | 'shotNum' | 'magPosition' | 'prPosition' | 'retoucher';
+type SortKey = 'order' | 'shotNum' | 'position' | 'retoucher';
 
-const SORT_VALUE: Record<Exclude<SortKey, 'order'>, (r: ShotRow) => string> = {
+/** Sort by a shot's own value, or its first property's that has one. */
+const SORT_VALUE: Record<Exclude<SortKey, 'order'>, (r: ShotRow, props: PropertyDef[]) => string> = {
   shotNum: (r) => r.shotNum || r.elvisName,
-  magPosition: (r) => r.mag.position,
-  prPosition: (r) => r.pr.position,
-  retoucher: (r) => r.mag.retoucher || r.pr.retoucher,
+  position: (r, props) => activeSides(r, props).map((side) => trackOf(r, side).position).find(Boolean) ?? '',
+  retoucher: (r, props) => activeSides(r, props).map((side) => trackOf(r, side).retoucher).find(Boolean) ?? '',
 };
 
 /**
@@ -29,20 +30,21 @@ export function TrackerSheet() {
   const header = useTrackerStore(useShallow((s) => s.doc.header));
   const setHeader = useTrackerStore((s) => s.setHeader);
   const addRow = useTrackerStore((s) => s.addRow);
+  const properties = useProperties();
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: 'order', asc: true });
 
   const visible = useMemo(() => {
-    const ids = rowIds.filter((id) => doc.rows[id] && matchesFilters(doc.rows[id], filters));
+    const ids = rowIds.filter((id) => doc.rows[id] && matchesFilters(doc.rows[id], filters, properties));
     if (sort.key === 'order') return ids;
     const value = SORT_VALUE[sort.key];
     return [...ids].sort((a, b) => {
-      const va = value(doc.rows[a]).trim();
-      const vb = value(doc.rows[b]).trim();
+      const va = value(doc.rows[a], properties).trim();
+      const vb = value(doc.rows[b], properties).trim();
       if (!va !== !vb) return va ? -1 : 1;
       const cmp = va.localeCompare(vb, undefined, { numeric: true });
       return sort.asc ? cmp : -cmp;
     });
-  }, [rowIds, doc, filters, sort]);
+  }, [rowIds, doc, filters, sort, properties]);
 
   const stats = useMemo(() => computeStats(doc), [doc]);
   const by = (key: SortKey) => () => setSort((s) => ({ key, asc: s.key === key ? !s.asc : true }));
@@ -79,11 +81,11 @@ export function TrackerSheet() {
               </div>
             </div>
             <div className="sheet-summary">
-              {(['mag', 'pr'] as Side[]).map((side) => {
-                const s = stats.sides[side];
+              {properties.map((prop) => {
+                const s = stats.sides[prop.id];
                 return (
-                  <div key={side} className="sheet-summary-side">
-                    <strong>{SIDE_LABELS[side]}</strong> {s.complete}/{s.shots} complete ({pct(s.complete, s.shots)}%)
+                  <div key={prop.id} className="sheet-summary-side">
+                    <strong>{prop.name}</strong> {s.complete}/{s.shots} complete ({pct(s.complete, s.shots)}%)
                     <span className="sheet-summary-stages">
                       {PIPELINE_STAGES.map((stage) => `${STAGE_LABELS[stage]} ${s.stages[stage].done}/${s.stages[stage].eligible}`).join(' · ')}
                     </span>
@@ -105,8 +107,9 @@ export function TrackerSheet() {
                 </th>
                 <th>Type</th>
                 <th>Runs in</th>
-                <th className="sortable" onClick={by('magPosition')}>
-                  Spread / Slide{arrow('magPosition')}
+                <th className="sortable" onClick={by('position')}>
+                  {positionHeading(properties)}
+                  {arrow('position')}
                 </th>
                 <th>Select</th>
                 <th className="sortable" onClick={by('retoucher')}>
@@ -129,4 +132,10 @@ export function TrackerSheet() {
       </div>
     </div>
   );
+}
+
+/** "Spread # / Slide #" — the position names in use, each once. */
+function positionHeading(properties: PropertyDef[]): string {
+  const names = [...new Set(properties.map((p) => p.positionLabel.replace(/\s*#$/, '')))];
+  return names.length > 3 ? 'Position' : names.join(' / ') || 'Position';
 }

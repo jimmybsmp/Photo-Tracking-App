@@ -1,15 +1,18 @@
 import {
   LONGSHOT_EXEMPT_STAGES,
   PIPELINE_STAGES,
-  ROW_FIELD_PATHS,
   STAGE_LABELS,
-  SIDE_LABELS,
+  parseFieldPath,
+  rowFieldPaths,
+  trackOf,
   type PipelineStage,
+  type PropertyDef,
   type ShotComment,
   type ShotRow,
   type Side,
   type TrackerDocument,
 } from './schema';
+import { propertyList } from './properties';
 
 /**
  * Pure read-only logic over a document — the one place that defines what
@@ -19,13 +22,13 @@ import {
 
 export type { Side };
 
-/** Which side(s) of a row are live, per its usage. */
-export function activeSides(row: ShotRow): Side[] {
-  if (row.usage === 'mag') return ['mag'];
-  if (row.usage === 'pr') return ['pr'];
-  if (row.usage === 'both') return ['mag', 'pr'];
-  return [];
+/** The properties a shot runs in, in the project's order. Hidden properties don't count. */
+export function activeSides(row: ShotRow, properties: PropertyDef[]): Side[] {
+  return properties.filter((p) => row.tracks[p.id]?.on).map((p) => p.id);
 }
+
+/** Runs in more than one property — the crossovers to keep in step. */
+export const isShared = (row: ShotRow, properties: PropertyDef[]) => activeSides(row, properties).length > 1;
 
 /** Stages that apply to this shot. A longshot skips assembled/submitted/approved. */
 export function applicableStages(row: ShotRow): PipelineStage[] {
@@ -34,18 +37,18 @@ export function applicableStages(row: ShotRow): PipelineStage[] {
 }
 
 export function isSideComplete(row: ShotRow, side: Side): boolean {
-  return applicableStages(row).every((stage) => row[side].pipeline[stage]);
+  return applicableStages(row).every((stage) => trackOf(row, side).pipeline[stage]);
 }
 
 /** Complete when every applicable stage is done on every active property. */
-export function isRowComplete(row: ShotRow): boolean {
-  const sides = activeSides(row);
+export function isRowComplete(row: ShotRow, properties: PropertyDef[]): boolean {
+  const sides = activeSides(row, properties);
   return sides.length > 0 && sides.every((side) => isSideComplete(row, side));
 }
 
 /** The first applicable stage not yet done on this property — what it's waiting on. */
 export function nextStage(row: ShotRow, side: Side): PipelineStage | null {
-  return applicableStages(row).find((stage) => !row[side].pipeline[stage]) ?? null;
+  return applicableStages(row).find((stage) => !trackOf(row, side).pipeline[stage]) ?? null;
 }
 
 /** Plain-language status for one property: "Waiting on QC", "Complete". */
@@ -57,12 +60,13 @@ export function sideStatusLabel(row: ShotRow, side: Side): string {
 /** How many applicable stages are done, for a small progress bar. */
 export function sideProgress(row: ShotRow, side: Side): { done: number; total: number } {
   const stages = applicableStages(row);
-  return { done: stages.filter((s) => row[side].pipeline[s]).length, total: stages.length };
+  return { done: stages.filter((s) => trackOf(row, side).pipeline[s]).length, total: stages.length };
 }
 
 /** Retouched but not yet QC'd — the bottleneck worth flagging. */
 export function isStalled(row: ShotRow, side: Side): boolean {
-  return row[side].pipeline.retouched && !row[side].pipeline.qc;
+  const t = trackOf(row, side);
+  return t.pipeline.retouched && !t.pipeline.qc;
 }
 
 /* ------------------------------------------------------------------ *
@@ -102,9 +106,11 @@ export interface SideStats {
 export interface DocStats {
   total: number;
   complete: number;
+  /** Shots running in more than one property. */
   shared: number;
   unassignedUsage: number;
   openConcerns: number;
+  /** Per property id, for every property in use. */
   sides: Record<Side, SideStats>;
 }
 
@@ -119,31 +125,34 @@ function emptySideStats(): SideStats {
 }
 
 export function computeStats(doc: TrackerDocument): DocStats {
+  const properties = propertyList(doc.properties);
   const stats: DocStats = {
     total: 0,
     complete: 0,
     shared: 0,
     unassignedUsage: 0,
     openConcerns: 0,
-    sides: { mag: emptySideStats(), pr: emptySideStats() },
+    sides: Object.fromEntries(properties.map((p) => [p.id, emptySideStats()])),
   };
 
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
     if (!row) continue;
     stats.total++;
-    if (row.usage === 'both') stats.shared++;
-    if (row.usage === 'none') stats.unassignedUsage++;
+    const sides = activeSides(row, properties);
+    if (sides.length > 1) stats.shared++;
+    if (sides.length === 0) stats.unassignedUsage++;
     stats.openConcerns += openConcerns(row).length;
-    if (isRowComplete(row)) stats.complete++;
+    if (isRowComplete(row, properties)) stats.complete++;
 
     const applicable = applicableStages(row);
-    for (const side of activeSides(row)) {
+    for (const side of sides) {
       const s = stats.sides[side];
+      const track = trackOf(row, side);
       s.shots++;
       for (const stage of applicable) {
         s.stages[stage].eligible++;
-        if (row[side].pipeline[stage]) s.stages[stage].done++;
+        if (track.pipeline[stage]) s.stages[stage].done++;
       }
       const next = nextStage(row, side);
       if (next) s.waiting[next]++;
@@ -165,6 +174,7 @@ export interface AttentionItem {
 }
 
 export function attentionItems(doc: TrackerDocument): AttentionItem[] {
+  const properties = propertyList(doc.properties);
   const items: AttentionItem[] = [];
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
@@ -172,15 +182,17 @@ export function attentionItems(doc: TrackerDocument): AttentionItem[] {
     for (const c of openConcerns(row)) {
       items.push({ rowId: id, kind: 'concern', side: c.side, text: `${c.author || 'Someone'}: ${c.text}`, at: c.at });
     }
-    if (row.usage === 'none') {
-      items.push({ rowId: id, kind: 'no-usage', side: null, text: 'Not assigned to magazine or press release', at: 0 });
+    const sides = activeSides(row, properties);
+    if (sides.length === 0) {
+      items.push({ rowId: id, kind: 'no-usage', side: null, text: 'Not assigned to any property', at: 0 });
     }
-    for (const side of activeSides(row)) {
+    for (const side of sides) {
+      const name = doc.properties[side]?.name ?? side;
       if (isStalled(row, side)) {
-        items.push({ rowId: id, kind: 'stalled', side, text: `${SIDE_LABELS[side]}: retouched, waiting on QC`, at: 0 });
+        items.push({ rowId: id, kind: 'stalled', side, text: `${name}: retouched, waiting on QC`, at: 0 });
       }
-      if (!row[side].retoucher.trim() && nextStage(row, side) === 'retouched') {
-        items.push({ rowId: id, kind: 'no-retoucher', side, text: `${SIDE_LABELS[side]}: no retoucher assigned`, at: 0 });
+      if (!trackOf(row, side).retoucher.trim() && nextStage(row, side) === 'retouched') {
+        items.push({ rowId: id, kind: 'no-retoucher', side, text: `${name}: no retoucher assigned`, at: 0 });
       }
     }
   }
@@ -196,17 +208,18 @@ export interface Workload {
 
 /** Per retoucher: placements assigned, and how many still aren't retouched. */
 export function retoucherWorkload(doc: TrackerDocument): Workload[] {
+  const properties = propertyList(doc.properties);
   const map = new Map<string, Workload>();
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
     if (!row) continue;
-    for (const side of activeSides(row)) {
-      const name = row[side].retoucher.trim();
+    for (const side of activeSides(row, properties)) {
+      const name = trackOf(row, side).retoucher.trim();
       if (!name) continue;
       const key = name.toUpperCase();
       const w = map.get(key) ?? { retoucher: name, assigned: 0, remaining: 0 };
       w.assigned++;
-      if (!row[side].pipeline.retouched) w.remaining++;
+      if (!trackOf(row, side).pipeline.retouched) w.remaining++;
       map.set(key, w);
     }
   }
@@ -223,7 +236,6 @@ export interface ActivityEntry {
 const FIELD_LABELS: Partial<Record<string, string>> = {
   shotNum: 'shot number',
   shotType: 'shot type',
-  usage: 'usage',
   notes: 'description',
   imageHash: 'photo',
 };
@@ -235,22 +247,28 @@ const FIELD_LABELS: Partial<Record<string, string>> = {
  */
 export function recentActivity(doc: TrackerDocument, limit = 25): ActivityEntry[] {
   const entries: ActivityEntry[] = [];
+  const nameOf = (side: Side) => doc.properties[side]?.short ?? side.toUpperCase();
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
     if (!row) continue;
     const shot = row.shotNum || row.elvisName || 'a shot';
-    for (const path of ROW_FIELD_PATHS) {
+    for (const path of rowFieldPaths(row)) {
       const stamp = row.fieldTimes[path];
       if (!stamp || !stamp.u) continue;
-      const m = /^(mag|pr)\.pipeline\.(\w+)$/.exec(path);
+      const parsed = parseFieldPath(path);
+      if (!parsed) continue;
+      const track = 'side' in parsed ? trackOf(row, parsed.side) : null;
       let text: string;
-      if (m) {
-        const side = m[1] as Side;
-        const stage = m[2] as PipelineStage;
-        text = `${row[side].pipeline[stage] ? 'marked' : 'unmarked'} ${STAGE_LABELS[stage]} on ${shot} (${side === 'mag' ? 'Mag' : 'PR'})`;
-      } else if (/^(mag|pr)\.retoucher$/.test(path)) {
-        const side = path.slice(0, path.indexOf('.')) as Side;
-        text = `assigned ${row[side].retoucher || 'no one'} to retouch ${shot} (${side === 'mag' ? 'Mag' : 'PR'})`;
+      if ('side' in parsed && track) {
+        const tag = nameOf(parsed.side);
+        if (parsed.field.startsWith('pipeline.')) {
+          const stage = parsed.field.slice(9) as PipelineStage;
+          text = `${track.pipeline[stage] ? 'marked' : 'unmarked'} ${STAGE_LABELS[stage]} on ${shot} (${tag})`;
+        } else if (parsed.field === 'retoucher') {
+          text = `assigned ${track.retoucher || 'no one'} to retouch ${shot} (${tag})`;
+        } else if (parsed.field === 'on') {
+          text = `${track.on ? 'added' : 'took'} ${shot} ${track.on ? 'to' : 'out of'} ${doc.properties[parsed.side]?.name ?? tag}`;
+        } else continue;
       } else if (path === 'elvisAssetId') {
         text = row.elvisAssetId ? `linked ${shot} to ${row.elvisName || 'its asset'} in Elvis` : `unlinked ${shot} from Elvis`;
       } else if (path === 'imageHash' && stamp.d === 'elvis') {
@@ -280,7 +298,8 @@ export function recentActivity(doc: TrackerDocument, limit = 25): ActivityEntry[
  * ------------------------------------------------------------------ */
 
 export interface Filters {
-  property: 'all' | 'mag' | 'pr' | 'both' | 'none';
+  /** A property id, or every shot, shots in more than one, or shots in none. */
+  property: 'all' | 'shared' | 'none' | Side;
   shotType: 'all' | 'longshot' | 'closeup' | 'unassigned';
   select: 'all' | 'main' | 'alt';
   /** Show only shots waiting on this stage (on whichever property is filtered). */
@@ -302,19 +321,22 @@ export function filtersActive(f: Filters): boolean {
   return (Object.keys(defaultFilters) as Array<keyof Filters>).some((k) => f[k] !== defaultFilters[k]);
 }
 
-export function matchesFilters(row: ShotRow, f: Filters): boolean {
-  if (f.property !== 'all') {
-    if (f.property === 'mag' && row.usage !== 'mag' && row.usage !== 'both') return false;
-    if (f.property === 'pr' && row.usage !== 'pr' && row.usage !== 'both') return false;
-    if ((f.property === 'both' || f.property === 'none') && row.usage !== f.property) return false;
-  }
+const GROUP_FILTERS = ['all', 'shared', 'none'];
+
+export function matchesFilters(row: ShotRow, f: Filters, properties: PropertyDef[]): boolean {
+  const active = activeSides(row, properties);
+  // A filter on a property that has since been hidden filters nothing.
+  const one = !GROUP_FILTERS.includes(f.property) && properties.some((p) => p.id === f.property) ? f.property : null;
+  if (one && !active.includes(one)) return false;
+  if (f.property === 'shared' && active.length < 2) return false;
+  if (f.property === 'none' && active.length > 0) return false;
   if (f.shotType !== 'all' && row.shotType !== f.shotType) return false;
 
   // Stage and select filters look at the property being filtered on, or at
   // any live property when none is chosen.
-  const sides = f.property === 'mag' || f.property === 'pr' ? [f.property] : activeSides(row);
+  const sides = one ? [one] : active;
 
-  if (f.select !== 'all' && !sides.some((side) => row[side].selectType === f.select)) return false;
+  if (f.select !== 'all' && !sides.some((side) => trackOf(row, side).selectType === f.select)) return false;
 
   if (f.waitingOn !== 'all') {
     if (sides.length === 0) return false;
@@ -329,8 +351,8 @@ export function matchesFilters(row: ShotRow, f: Filters): boolean {
   if (f.attention === 'any') {
     const flagged =
       openConcerns(row).length > 0 ||
-      row.usage === 'none' ||
-      activeSides(row).some((side) => isStalled(row, side) || (!row[side].retoucher.trim() && !row[side].pipeline.retouched));
+      active.length === 0 ||
+      active.some((side) => isStalled(row, side) || (!trackOf(row, side).retoucher.trim() && !trackOf(row, side).pipeline.retouched));
     if (!flagged) return false;
   }
 
@@ -340,11 +362,8 @@ export function matchesFilters(row: ShotRow, f: Filters): boolean {
       row.shotNum,
       row.elvisName,
       row.elvisPath,
-      row.mag.retoucher,
-      row.pr.retoucher,
-      row.mag.position,
-      row.pr.position,
       row.notes,
+      ...Object.values(row.tracks).flatMap((t) => [t.retoucher, t.position]),
       ...Object.values(row.comments).map((c) => c.text),
     ]
       .join(' ')

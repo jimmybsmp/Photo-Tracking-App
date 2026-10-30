@@ -5,8 +5,8 @@
 /*
  * Dark chrome around a light working surface. The bars, panels and the
  * inspector are instrument-panel; the shot tiles and the printed sheet are
- * the paper the shoot is judged on, so they stay white. Magazine and press
- * release each keep one colour everywhere — tile, dashboard, sheet, comment
+ * the paper the shoot is judged on, so they stay white. Each property keeps
+ * one colour everywhere — tile, dashboard, sheet, comment
  * tag — so the two tracks never blur together. One accent marks selection
  * and the primary action; amber means "needs someone", red means broken.
  */
@@ -35,12 +35,11 @@
   --accent-dim: #2563eb;
   --accent-wash: rgba(59, 130, 246, 0.16);
 
-  --mag: #60a5fa;
-  --mag-ink: #1e40af;
-  --mag-wash: #dbeafe;
-  --pr: #34d399;
-  --pr-ink: #166534;
-  --pr-wash: #dcfce7;
+  /* A property's colour is set on the element that draws it (propertyStyle()
+     in state/properties.ts): --prop, and --prop-ink / --prop-wash from it. */
+  --prop: #94a3b8;
+  --prop-ink: #334155;
+  --prop-wash: #e2e8f0;
 
   --ok: #22c55e;
   --warn: #f59e0b;
@@ -811,14 +810,9 @@ textarea.field {
   padding: 1px 4px;
   min-width: 28px;
   text-align: center;
-}
-.track-label-mag {
-  background: var(--mag-wash);
-  color: var(--mag-ink);
-}
-.track-label-pr {
-  background: var(--pr-wash);
-  color: var(--pr-ink);
+  background: var(--prop-wash);
+  color: var(--prop-ink);
+  white-space: nowrap;
 }
 .track-dots {
   display: inline-flex;
@@ -830,13 +824,9 @@ textarea.field {
   border-radius: 50%;
   border: 1.5px solid #c4c9d0;
 }
-.track-mag .track-dot-done {
-  background: var(--mag-ink);
-  border-color: var(--mag-ink);
-}
-.track-pr .track-dot-done {
-  background: var(--pr-ink);
-  border-color: var(--pr-ink);
+.track-dot-done {
+  background: var(--prop-ink);
+  border-color: var(--prop-ink);
 }
 .track-dot-next {
   border-color: var(--warn);
@@ -861,13 +851,9 @@ textarea.field {
 .panel .track-dot {
   border-color: var(--chrome-500);
 }
-.panel .track-mag .track-dot-done {
-  background: var(--mag);
-  border-color: var(--mag);
-}
-.panel .track-pr .track-dot-done {
-  background: var(--pr);
-  border-color: var(--pr);
+.panel .track-dot-done {
+  background: var(--prop);
+  border-color: var(--prop);
 }
 
 /* --- inspector ------------------------------------------------------------- */
@@ -941,21 +927,15 @@ textarea.field {
   border-radius: 8px;
   padding: 12px;
   background: var(--chrome-800);
-  border-left: 3px solid var(--mag);
-}
-.property-section.property-pr {
-  border-left-color: var(--pr);
+  border-left: 3px solid var(--prop);
 }
 .property-section header {
   display: flex;
   align-items: baseline;
   gap: 8px;
 }
-.property-section.property-mag h3 {
-  color: var(--mag);
-}
-.property-section.property-pr h3 {
-  color: var(--pr);
+.property-section h3 {
+  color: var(--prop);
 }
 .status-text {
   flex: 1;
@@ -1022,6 +1002,46 @@ textarea.field {
 }
 .check-who {
   padding: 2px 0 0 38px;
+}
+/* "Runs in": one toggle per property, any combination. */
+.runs-in {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.prop-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--chrome-600);
+  background: var(--chrome-800);
+  color: var(--chrome-200);
+  font-weight: 600;
+}
+.prop-toggle:hover {
+  border-color: var(--prop);
+}
+.prop-toggle-box {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 2px solid var(--prop);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 900;
+  color: var(--chrome-950);
+}
+.prop-toggle-on {
+  border-color: var(--prop);
+  color: #fff;
+}
+.prop-toggle-on .prop-toggle-box {
+  background: var(--prop);
 }
 .delete-shot {
   align-self: flex-start;
@@ -1194,24 +1214,28 @@ textarea.field {
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 12px;
 }
+.property-cards-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+.shared-tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
 .property-card {
   background: var(--chrome-850);
   border: 1px solid var(--chrome-700);
-  border-top: 3px solid var(--mag);
+  border-top: 3px solid var(--prop);
   border-radius: 10px;
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.property-card.property-pr {
-  border-top-color: var(--pr);
-}
 .property-card .bar-fill {
-  background: var(--mag);
-}
-.property-card.property-pr .bar-fill {
-  background: var(--pr);
+  background: var(--prop);
 }
 .property-head {
   display: flex;
@@ -1539,13 +1563,9 @@ textarea.field {
 .stage-cell:hover {
   border-color: var(--ink-dim);
 }
-.split-mag .stage-cell-done {
-  background: var(--mag-ink);
-  border-color: var(--mag-ink);
-}
-.split-pr .stage-cell-done {
-  background: var(--pr-ink);
-  border-color: var(--pr-ink);
+.split .stage-cell-done {
+  background: var(--prop-ink);
+  border-color: var(--prop-ink);
 }
 .stage-cell-skip {
   border: none;
@@ -1850,4 +1870,103 @@ textarea.field {
 }
 .toast-bad {
   border-left-color: var(--bad);
+}
+
+/* --- property manager ------------------------------------------------------ */
+
+.prop-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prop-item {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 2fr) 80px minmax(110px, 1.2fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--chrome-900);
+  border: 1px solid var(--chrome-700);
+  border-left: 4px solid var(--prop);
+}
+.prop-item-hidden {
+  opacity: 0.6;
+}
+.prop-swatch-wrap {
+  position: relative;
+  align-self: center;
+}
+.prop-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--chrome-600);
+  background: var(--prop);
+  padding: 0;
+}
+.prop-swatch-on {
+  border-color: #fff;
+}
+.prop-palette {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(5, 22px);
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--chrome-800);
+  border: 1px solid var(--chrome-600);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.prop-count {
+  align-self: center;
+  white-space: nowrap;
+}
+.prop-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}
+.prop-add .field {
+  flex: 1;
+  min-width: 0;
+}
+.prop-hidden h4 {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: var(--chrome-300);
+}
+@media (max-width: 760px) {
+  .prop-item {
+    grid-template-columns: auto 1fr 1fr;
+  }
+}
+
+/* Sheet: which properties a shot runs in — click a tag to switch it. */
+.runs-in-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.run-tag {
+  border: 1px solid transparent;
+  cursor: pointer;
+  min-width: 0;
+}
+.run-tag-off {
+  background: transparent;
+  color: #aab1ba;
+  border-color: #d5d9de;
+}
+.run-tag-off:hover {
+  color: var(--prop-ink);
+  border-color: var(--prop);
 }

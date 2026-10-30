@@ -15,12 +15,23 @@ same build split, same reasons for both.
   `useShallow` — it makes the store see a new value every render and loops
   until React throws error #185. Read scalars individually, or subscribe to
   one row by id (`s.doc.rows[rowId]`) rather than the whole `rows` map.
-- **Magazine and press release are separate tracks, every stage included.**
-  The user confirmed it: magazine images get their own CMYK and detail
-  retouching. Never merge, mirror or OR the two sides' stages together.
-- **A display decision never discards data.** Switching a row's usage away
-  from a side, or its shot type to longshot, must never clear that side's
-  position, retoucher, or stages. A longshot's assembled/submitted/approved
+- **Every property is a separate track, every stage included.** The user
+  confirmed it: magazine images get their own CMYK and detail retouching.
+  Never merge, mirror or OR two properties' stages together.
+- **Properties are data.** `doc.properties` (Magazine `mag` and Press release
+  `pr` to start) is the list; a row holds `tracks[propertyId]`, each with its
+  own `on`. Never hard-code `mag`/`pr` in a view — list properties through
+  `useProperties()` / `propertyList()`, colour them with `propertyStyle()`
+  (computed in JS: the 10.13 app's Chromium has no `color-mix()`), and read a
+  track through `trackOf()`. A property is hidden (`archived`), never deleted.
+  Definitions merge by their own stamp (`mergeProperties`) inside
+  `mergeDelta`. Field paths keep the v2 form `<propertyId>.<field>`, so every
+  old stamp stays valid. Rows written to files and deltas also carry the v3
+  `mag`/`pr`/`usage` fields (`withLegacyFields`) so a site still on 0.4 reads
+  them instead of blanks.
+- **A display decision never discards data.** Taking a shot out of a
+  property, hiding a property, or switching a shot to longshot must never
+  clear a track's position, retoucher, or stages. A longshot's assembled/submitted/approved
   are *hidden* and left out of counts — the user's rule — not reset or
   disabled. `state/selectors.ts` (`applicableStages`, `activeSides`,
   `nextStage`) is the single definition of what's shown and counted; views
@@ -120,8 +131,9 @@ A project with no shared file and nothing linked makes no Elvis calls at all.
 
 Three views: Overview (executive dashboard, opens first), Shots (tiles +
 shot panel), Sheet (print). Dark chrome (bars, panels, inspector, overview)
-around a light working surface (shot tiles, the printed sheet). Magazine and
-press release each keep one colour everywhere (`--mag`, `--pr`) — the chrome is instrument-panel, the surface
+around a light working surface (shot tiles, the printed sheet). Each property
+keeps one colour everywhere (its `color`, as `--prop` / `--prop-ink` /
+`--prop-wash` from `propertyStyle()`) — the chrome is instrument-panel, the surface
 is the paper the shoot gets judged on, so it stays white on screen and on
 paper alike. Tokens and component classes live in `src/styles/index.css`;
 print-only rules are in `src/styles/print.css`, targeting `.sheet-page` and

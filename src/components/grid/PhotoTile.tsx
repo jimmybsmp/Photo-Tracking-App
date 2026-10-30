@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { activeSides, openConcerns } from '@/state/selectors';
 import { StageTrack } from '@/components/ui/StageTrack';
+import { useProperties } from '@/components/ui/hooks';
 
 export const ROW_DRAG_TYPE = 'application/x-phototrack-row';
 
@@ -25,10 +26,11 @@ function PhotoTileImpl({ rowId, onDropFiles }: { rowId: string; onDropFiles: (ro
   const toggleSelect = useTrackerStore((s) => s.toggleSelect);
   const openRow = useTrackerStore((s) => s.openRow);
   const reorderRow = useTrackerStore((s) => s.reorderRow);
+  const properties = useProperties();
   const [over, setOver] = useState(false);
 
   if (!row) return null;
-  const sides = activeSides(row);
+  const sides = activeSides(row, properties);
   const concerns = openConcerns(row).length;
   const width = Math.round(200 * zoom);
 
@@ -96,9 +98,9 @@ function PhotoTileImpl({ rowId, onDropFiles }: { rowId: string; onDropFiles: (ro
 
       <div className="tile-tracks">
         {sides.length === 0 ? (
-          <span className="tile-nousage">Set magazine / press release</span>
+          <span className="tile-nousage">Choose where it runs</span>
         ) : (
-          sides.map((side) => <StageTrack key={side} row={row} side={side} />)
+          properties.filter((p) => sides.includes(p.id)).map((p) => <StageTrack key={p.id} row={row} prop={p} />)
         )}
       </div>
     </div>

@@ -1,16 +1,20 @@
-import { useRef } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
+import { useUiStore } from '@/state/ui';
 import { activeSides, applicableStages, nextStage, sideProgress } from '@/state/selectors';
-import { SIDE_LABELS, STAGE_LABELS, stagePath, type RowFieldPath, type ShotRow, type ShotType, type Side, type Usage } from '@/state/schema';
+import { propertyStyle } from '@/state/properties';
+import { STAGE_LABELS, stagePath, trackOf, trackPath, type PropertyDef, type RowFieldPath, type ShotRow, type ShotType } from '@/state/schema';
 import { stampTime } from '@/lib/format';
 import { useFileImport } from '@/components/grid/useFileImport';
+import { useProperties } from '@/components/ui/hooks';
 import { CommentThread } from './CommentThread';
 import { ElvisLink } from './ElvisLink';
 
 /**
- * Everything about one shot. Switching usage or shot type is purely a display
- * decision: hiding a property, or a longshot's last three stages, never
- * clears what was entered — switching back shows the same values again.
+ * Everything about one shot. Taking a shot out of a property or changing its
+ * shot type is purely a display decision: hiding a property's track, or a
+ * longshot's last three stages, never clears what was entered — switching
+ * back shows the same values again.
  */
 export function Inspector() {
   const rowId = useTrackerStore((s) => s.activeRowId);
@@ -23,11 +27,13 @@ export function Inspector() {
   const setField = useTrackerStore((s) => s.setField);
   const openRow = useTrackerStore((s) => s.openRow);
   const deleteRows = useTrackerStore((s) => s.deleteRows);
+  const openProperties = useUiStore((s) => s.openProperties);
+  const properties = useProperties();
   const { importInto } = useFileImport();
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!row || !rowId) return null;
-  const sides = activeSides(row);
+  const sides = activeSides(row, properties);
   const text = (path: RowFieldPath, value: string) => setField(rowId, path, value, { typing: true });
 
   return (
@@ -74,25 +80,34 @@ export function Inspector() {
 
         <div className="field-label">
           <span>Runs in</span>
-          <div className="segmented">
-            {(
-              [
-                ['mag', 'Magazine'],
-                ['pr', 'Press release'],
-                ['both', 'Both'],
-                ['none', 'Neither yet'],
-              ] as Array<[Usage, string]>
-            ).map(([value, label]) => (
-              <button key={value} className={row.usage === value ? 'seg-active' : ''} onClick={() => setField(rowId, 'usage', value)}>
-                {label}
-              </button>
-            ))}
+          <div className="runs-in">
+            {properties.map((p) => {
+              const on = sides.includes(p.id);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`prop-toggle ${on ? 'prop-toggle-on' : ''}`}
+                  style={propertyStyle(p.color) as CSSProperties}
+                  aria-pressed={on}
+                  onClick={() => setField(rowId, trackPath(p.id, 'on'), !on)}
+                >
+                  <span className="prop-toggle-box">{on ? '✓' : ''}</span>
+                  {p.name}
+                </button>
+              );
+            })}
+            <button type="button" className="link-btn small" onClick={openProperties}>
+              + Property…
+            </button>
           </div>
         </div>
 
-        {sides.map((side) => (
-          <PropertySection key={side} row={row} side={side} />
-        ))}
+        {properties
+          .filter((p) => sides.includes(p.id))
+          .map((p, i) => (
+            <PropertySection key={p.id} row={row} prop={p} hotkey={i === 0 ? '' : i === 1 ? '⇧' : null} />
+          ))}
         {sides.length === 0 && <p className="muted small">Choose where this shot runs to track its progress.</p>}
 
         <label className="field-label">
@@ -118,19 +133,25 @@ export function Inspector() {
   );
 }
 
-function PropertySection({ row, side }: { row: ShotRow; side: Side }) {
+/**
+ * One property's track. `hotkey` is the modifier its 1–5 shortcuts use: none
+ * for the first property the shot runs in, ⇧ for the second, and no
+ * shortcuts (null) beyond that.
+ */
+function PropertySection({ row, prop, hotkey }: { row: ShotRow; prop: PropertyDef; hotkey: string | null }) {
   const setField = useTrackerStore((s) => s.setField);
   const toggleStage = useTrackerStore((s) => s.toggleStage);
+  const side = prop.id;
   const stages = applicableStages(row);
   const next = nextStage(row, side);
   const { done, total } = sideProgress(row, side);
-  const p = row[side];
+  const p = trackOf(row, side);
   const text = (path: RowFieldPath, value: string) => setField(row.id, path, value, { typing: true });
 
   return (
-    <section className={`property-section property-${side}`}>
+    <section className="property-section" style={propertyStyle(prop.color) as CSSProperties}>
       <header>
-        <h3>{SIDE_LABELS[side]}</h3>
+        <h3>{prop.name}</h3>
         <span className={`status-text ${next ? '' : 'status-complete'}`}>{next ? `Waiting on ${STAGE_LABELS[next]}` : 'Complete'}</span>
         <span className="muted small">
           {done}/{total}
@@ -139,19 +160,19 @@ function PropertySection({ row, side }: { row: ShotRow; side: Side }) {
 
       <div className="form-grid">
         <label className="field-label">
-          <span>{side === 'mag' ? 'Spread #' : 'Slide #'}</span>
-          <input className="field" value={p.position} onChange={(e) => text(`${side}.position` as RowFieldPath, e.target.value)} />
+          <span>{prop.positionLabel}</span>
+          <input className="field" value={p.position} onChange={(e) => text(trackPath(side, 'position'), e.target.value)} />
         </label>
         <label className="field-label">
           <span>Select</span>
-          <select className="field field-select" value={p.selectType} onChange={(e) => setField(row.id, `${side}.selectType` as RowFieldPath, e.target.value)}>
+          <select className="field field-select" value={p.selectType} onChange={(e) => setField(row.id, trackPath(side, 'selectType'), e.target.value)}>
             <option value="main">Main select</option>
             <option value="alt">Alt shot</option>
           </select>
         </label>
         <label className="field-label form-span">
           <span>Retoucher</span>
-          <input className="field" value={p.retoucher} onChange={(e) => text(`${side}.retoucher` as RowFieldPath, e.target.value)} placeholder="Name or initials" />
+          <input className="field" value={p.retoucher} onChange={(e) => text(trackPath(side, 'retoucher'), e.target.value)} placeholder="Name or initials" />
         </label>
       </div>
 
@@ -164,10 +185,12 @@ function PropertySection({ row, side }: { row: ShotRow; side: Side }) {
               <button className={`check ${isDone ? 'check-done' : ''} ${stage === next ? 'check-next' : ''}`} onClick={() => toggleStage(row.id, side, stage)}>
                 <span className="check-box">{isDone ? '✓' : ''}</span>
                 <span className="check-label">{STAGE_LABELS[stage]}</span>
-                <span className="check-key muted small" title="Keyboard shortcut">
-                  {side === 'pr' && row.usage === 'both' ? '⇧' : ''}
-                  {i + 1}
-                </span>
+                {hotkey !== null && (
+                  <span className="check-key muted small" title="Keyboard shortcut">
+                    {hotkey}
+                    {i + 1}
+                  </span>
+                )}
               </button>
               {stamp?.u && stamp.t > 1 && (
                 <span className="check-who muted small">

@@ -1,5 +1,5 @@
 import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from 'fflate';
-import { migrate, type AssetMeta, type PendingImage, type TrackerDocument } from '@/state/schema';
+import { migrate, withLegacyFields, type AssetMeta, type PendingImage, type TrackerDocument } from '@/state/schema';
 import { isDeltaFile, type DeltaFile } from './delta';
 import { importImageDataUrl } from './images';
 import { desktop } from './desktop';
@@ -135,7 +135,9 @@ function unpackAssets(
 /** Build the zip bytes for a document. */
 export function packDocument(doc: TrackerDocument): Uint8Array {
   const { files, manifest } = packAssets(doc.assets);
-  files['document.json'] = strToU8(JSON.stringify({ ...doc, assets: manifest }));
+  // Rows carry their v3 fields too, so a site still on 0.4 can open the file.
+  const rows = Object.fromEntries(Object.entries(doc.rows).map(([id, row]) => [id, withLegacyFields(row)]));
+  files['document.json'] = strToU8(JSON.stringify({ ...doc, rows, assets: manifest }));
   return zipSync(files, { level: 6 });
 }
 

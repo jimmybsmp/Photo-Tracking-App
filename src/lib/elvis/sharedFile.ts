@@ -116,6 +116,7 @@ export function mergeShared(doc: TrackerDocument, copies: DeltaFile[]): { doc: T
     summary.fieldsChanged += result.summary.fieldsChanged;
     summary.commentsChanged += result.summary.commentsChanged;
     summary.headerChanged = summary.headerChanged || result.summary.headerChanged;
+    summary.propertiesChanged += result.summary.propertiesChanged;
   }
   return { doc: summaryChanged(summary) ? next : doc, summary };
 }

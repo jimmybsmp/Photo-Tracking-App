@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { commentThreads } from '@/state/selectors';
-import { SIDE_LABELS, type CommentKind, type ShotComment, type ShotRow, type Side } from '@/state/schema';
+import { activeSides } from '@/state/selectors';
+import type { CommentKind, ShotComment, ShotRow, Side } from '@/state/schema';
 import { stampTime } from '@/lib/format';
-import { useIdentity } from '@/components/ui/hooks';
+import { useIdentity, useProperties } from '@/components/ui/hooks';
+import { PropertyTag } from '@/components/ui/StageTrack';
 
 /**
  * Notes and concerns on one shot. A concern stays open — counted on the
@@ -16,7 +18,12 @@ export function CommentThread({ row }: { row: ShotRow }) {
   const setResolved = useTrackerStore((s) => s.setCommentResolved);
   const [text, setText] = useState('');
   const [kind, setKind] = useState<CommentKind>(identity?.role === 'executive' ? 'concern' : 'note');
-  const [side, setSide] = useState<Side | null>(row.usage === 'mag' || row.usage === 'pr' ? row.usage : null);
+  const properties = useProperties();
+  // A shot in one property: comments are about that one, unless changed.
+  const [side, setSide] = useState<Side | null>(() => {
+    const active = activeSides(row, properties);
+    return active.length === 1 ? active[0] : null;
+  });
 
   const threads = commentThreads(row);
   const post = () => {
@@ -54,8 +61,11 @@ export function CommentThread({ row }: { row: ShotRow }) {
           </div>
           <select className="field field-select field-sm" value={side ?? ''} onChange={(e) => setSide((e.target.value || null) as Side | null)}>
             <option value="">Whole shot</option>
-            <option value="mag">Magazine</option>
-            <option value="pr">Press release</option>
+            {properties.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
           </select>
           <button className="btn btn-primary btn-sm" disabled={!text.trim()} onClick={post}>
             Post
@@ -155,10 +165,16 @@ function CommentBody({ comment }: { comment: ShotComment }) {
         {comment.kind === 'concern' && !comment.replyTo && (
           <span className={`kind-badge ${comment.resolved ? 'kind-resolved' : 'kind-concern'}`}>{comment.resolved ? 'Resolved' : 'Concern'}</span>
         )}
-        {comment.side && <span className={`track-label track-label-${comment.side}`}>{SIDE_LABELS[comment.side]}</span>}
+        {comment.side && <CommentSide side={comment.side} />}
         <span className="muted small">{stampTime(comment.at)}</span>
       </div>
       <p className="comment-text">{comment.text}</p>
     </>
   );
+}
+
+/** The property a comment is about — still shown if that property was hidden since. */
+function CommentSide({ side }: { side: Side }) {
+  const prop = useTrackerStore((s) => s.doc.properties[side]);
+  return prop ? <PropertyTag prop={prop} /> : null;
 }

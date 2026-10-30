@@ -3,13 +3,14 @@ import { newId } from '@/lib/compat';
 /**
  * Project document schema and the load-time migration path.
  *
- * The unit of work is a shot: one frame that may run in the magazine, in a
- * press release, or both. Each property is tracked on its own track — every
- * stage, retouching included — because a magazine image is printed far larger
- * than anything online and usually gets its own CMYK colour work and detail
- * retouching. `mag` and `pr` are always present on a row; `usage` decides
- * which are live and the UI hides the other, but a hidden side's data is
- * never discarded — switching usage back and forth must not lose work.
+ * The unit of work is a shot: one frame that may run in any of the project's
+ * properties — the magazine, a press release, anything added — and often in
+ * several. Each property is tracked on its own track, every stage, retouching
+ * included, because a magazine image is printed far larger than anything
+ * online and usually gets its own CMYK colour work and detail retouching.
+ * Each track's `on` decides whether the shot runs there and the UI hides the
+ * rest, but a hidden track's data is never discarded — taking a shot out of a
+ * property and back must not lose work.
  *
  * Version 2 changes, all handled by `migrate()`:
  *   - Edit stamps carry the person's name, so every stage shows who marked it.
@@ -27,7 +28,16 @@ import { newId } from '@/lib/compat';
  * meaning any more and is dropped.
  */
 
-export const SCHEMA_VERSION = 3;
+/*
+ * Version 4: properties are the project's own list (`doc.properties`) —
+ * Magazine and Press release to start, and any others someone adds. A shot
+ * has one track per property (`row.tracks`), each with its own `on` switch,
+ * replacing the fixed `mag`/`pr` pair and the single `usage` field. Field
+ * paths keep the v2 shape (`mag.position`, `mag.pipeline.qc`), so every
+ * stored stamp stays valid; `usage` becomes `mag.on` / `pr.on`.
+ */
+
+export const SCHEMA_VERSION = 4;
 
 /* ------------------------------------------------------------------ *
  * Pipeline
@@ -64,23 +74,97 @@ export function normalizeStage(value: unknown): boolean {
  */
 export const LONGSHOT_EXEMPT_STAGES: PipelineStage[] = ['assembled', 'submitted', 'approved'];
 
-export type Usage = 'none' | 'mag' | 'pr' | 'both';
 export type ShotType = 'unassigned' | 'longshot' | 'closeup';
 export type SelectType = 'main' | 'alt';
-export type Side = 'mag' | 'pr';
-
-export const SIDE_LABELS: Record<Side, string> = { mag: 'Magazine', pr: 'Press release' };
+/** A property's id — `mag` and `pr` for the two every project starts with. */
+export type Side = string;
 
 export interface Placement {
-  /** Spread # for the magazine side, Slide # for the PR side. */
+  /** Spread # for a magazine, Slide # for a press release — see `positionLabel`. */
   position: string;
   selectType: SelectType;
   retoucher: string;
   pipeline: Pipeline;
 }
 
+/** A shot's track in one property. `on` says whether the shot runs there. */
+export interface Track extends Placement {
+  on: boolean;
+}
+
 export function emptyPlacement(): Placement {
   return { position: '', selectType: 'main', retoucher: '', pipeline: emptyPipeline() };
+}
+
+export const emptyTrack = (): Track => ({ ...emptyPlacement(), on: false });
+
+/* ------------------------------------------------------------------ *
+ * Properties — where shots run
+ * ------------------------------------------------------------------ */
+
+/**
+ * One property a shot can run in. Every property works the same way — its
+ * own five stages, retoucher, position and select — and a shot can run in
+ * any number of them. Removing one only hides it (`archived`): the tracks
+ * shots have in it are kept, and come back if it's restored.
+ */
+export interface PropertyDef {
+  id: string;
+  name: string;
+  /** Two-to-four letter tag for tiles and the sheet: MAG, PR, WEB. */
+  short: string;
+  color: string;
+  /** What the position field is called here: Spread #, Slide #, Page #. */
+  positionLabel: string;
+  order: number;
+  archived: boolean;
+  /** Last change to this definition; null for the built-in defaults never edited. */
+  t: FieldStamp | null;
+}
+
+export const DEFAULT_PROPERTIES: PropertyDef[] = [
+  { id: 'mag', name: 'Magazine', short: 'MAG', color: '#60a5fa', positionLabel: 'Spread #', order: 0, archived: false, t: null },
+  { id: 'pr', name: 'Press release', short: 'PR', color: '#34d399', positionLabel: 'Slide #', order: 1, archived: false, t: null },
+];
+
+/** Colours offered for new properties, in the order they're handed out. */
+export const PROPERTY_COLORS = ['#f59e0b', '#a78bfa', '#f472b6', '#22d3ee', '#fb923c', '#a3e635', '#e879f9', '#94a3b8', '#60a5fa', '#34d399'];
+
+export const defaultProperties = (): Record<string, PropertyDef> =>
+  Object.fromEntries(DEFAULT_PROPERTIES.map((p) => [p.id, { ...p }]));
+
+/** A property id is a single path segment: letters, digits, `_` and `-`. */
+export const isPropertyId = (id: unknown): id is string =>
+  typeof id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(id) && !(TOP_FIELD_PATHS as readonly string[]).includes(id);
+
+function normalizeProperty(raw: unknown, id: string, order: number): PropertyDef | null {
+  if (!isPropertyId(id)) return null;
+  const r = (raw ?? {}) as Partial<PropertyDef>;
+  const fallback = DEFAULT_PROPERTIES.find((p) => p.id === id);
+  const name = typeof r.name === 'string' && r.name.trim() ? r.name.trim() : fallback?.name ?? id;
+  const color = typeof r.color === 'string' && /^#[0-9a-f]{6}$/i.test(r.color) ? r.color : fallback?.color ?? PROPERTY_COLORS[order % PROPERTY_COLORS.length];
+  const t = r.t && typeof r.t === 'object' && typeof r.t.t === 'number' ? (r.t as FieldStamp) : null;
+  return {
+    id,
+    name,
+    short: (typeof r.short === 'string' && r.short.trim() ? r.short.trim() : fallback?.short ?? name.slice(0, 3)).toUpperCase().slice(0, 6),
+    color,
+    positionLabel: typeof r.positionLabel === 'string' && r.positionLabel.trim() ? r.positionLabel.trim() : fallback?.positionLabel ?? 'Position',
+    order: Number.isFinite(Number(r.order)) ? Number(r.order) : order,
+    archived: r.archived === true,
+    t,
+  };
+}
+
+/** Coerce a property list from a file or a delta. */
+export function normalizeProperties(raw: unknown): Record<string, PropertyDef> {
+  const out: Record<string, PropertyDef> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  Object.entries(raw as Record<string, unknown>).forEach(([id, v], i) => {
+    const p = normalizeProperty(v, id, i);
+    if (p) out[id] = p;
+  });
+  return out;
 }
 
 /* ------------------------------------------------------------------ *
@@ -104,36 +188,44 @@ export function isNewerStamp(a: FieldStamp, b: FieldStamp | null | undefined): b
   return a.d > b.d;
 }
 
-/** Every field path a row tracks provenance for. */
-export const ROW_FIELD_PATHS = [
-  'shotNum',
-  'shotType',
-  'usage',
-  'notes',
-  'elvisAssetId',
-  'elvisName',
-  'elvisPath',
-  'imageHash',
-  'mag.position',
-  'mag.selectType',
-  'mag.retoucher',
-  'mag.pipeline.retouched',
-  'mag.pipeline.qc',
-  'mag.pipeline.assembled',
-  'mag.pipeline.submitted',
-  'mag.pipeline.approved',
-  'pr.position',
-  'pr.selectType',
-  'pr.retoucher',
-  'pr.pipeline.retouched',
-  'pr.pipeline.qc',
-  'pr.pipeline.assembled',
-  'pr.pipeline.submitted',
-  'pr.pipeline.approved',
-] as const;
-export type RowFieldPath = (typeof ROW_FIELD_PATHS)[number];
+/** Fields of the shot itself. */
+export const TOP_FIELD_PATHS = ['shotNum', 'shotType', 'notes', 'elvisAssetId', 'elvisName', 'elvisPath', 'imageHash'] as const;
+export type TopFieldPath = (typeof TOP_FIELD_PATHS)[number];
 
+/** Fields of each track, after the property id: `mag.position`, `web.pipeline.qc`. */
+export const TRACK_FIELD_PATHS = [
+  'on',
+  'position',
+  'selectType',
+  'retoucher',
+  ...PIPELINE_STAGES.map((stage) => `pipeline.${stage}` as const),
+] as const;
+export type TrackFieldPath = (typeof TRACK_FIELD_PATHS)[number];
+
+export type RowFieldPath = TopFieldPath | `${string}.${TrackFieldPath}`;
+
+export const trackPath = (side: Side, field: TrackFieldPath) => `${side}.${field}` as RowFieldPath;
 export const stagePath = (side: Side, stage: PipelineStage) => `${side}.pipeline.${stage}` as RowFieldPath;
+
+/** Split a path into the shot field, or the property and track field it names. */
+export function parseFieldPath(path: string): { top: TopFieldPath } | { side: Side; field: TrackFieldPath } | null {
+  if ((TOP_FIELD_PATHS as readonly string[]).includes(path)) return { top: path as TopFieldPath };
+  const dot = path.indexOf('.');
+  if (dot < 1) return null;
+  const side = path.slice(0, dot);
+  const field = path.slice(dot + 1);
+  if (!isPropertyId(side) || !(TRACK_FIELD_PATHS as readonly string[]).includes(field)) return null;
+  return { side, field: field as TrackFieldPath };
+}
+
+export const isRowFieldPath = (path: string): path is RowFieldPath => parseFieldPath(path) !== null;
+
+/** Every field path a row holds: its own fields and those of each track it has. */
+export function rowFieldPaths(row: ShotRow): RowFieldPath[] {
+  const paths: RowFieldPath[] = [...TOP_FIELD_PATHS];
+  for (const side of Object.keys(row.tracks)) for (const field of TRACK_FIELD_PATHS) paths.push(trackPath(side, field));
+  return paths;
+}
 
 /* ------------------------------------------------------------------ *
  * Comments — how an executive's concerns reach the people doing the work
@@ -155,7 +247,7 @@ export interface ShotComment {
   author: string;
   role: Role;
   at: number;
-  /** Which property the comment is about, or null for the shot as a whole. */
+  /** Which property (id) the comment is about, or null for the shot as a whole. */
   side: Side | null;
   /** Parent comment id for a reply; null for a top-level comment. */
   replyTo: string | null;
@@ -183,11 +275,10 @@ export interface ShotRow {
   id: string;
   shotNum: string;
   shotType: ShotType;
-  usage: Usage;
   /** Key into `assets`, or null before a frame is attached. */
   imageHash: string | null;
-  mag: Placement;
-  pr: Placement;
+  /** One track per property the shot has ever been in, keyed by property id. */
+  tracks: Record<Side, Track>;
   /** WoodWing Elvis asset id, once this row is linked to an asset. */
   elvisAssetId: string;
   /** The asset's filename in Elvis, for display. */
@@ -209,10 +300,8 @@ export function makeRow(id: string = newId()): ShotRow {
     id,
     shotNum: '',
     shotType: 'unassigned',
-    usage: 'none',
     imageHash: null,
-    mag: emptyPlacement(),
-    pr: emptyPlacement(),
+    tracks: {},
     elvisAssetId: '',
     elvisName: '',
     elvisPath: '',
@@ -222,28 +311,37 @@ export function makeRow(id: string = newId()): ShotRow {
   };
 }
 
-/** Read a row field by its dot path, for generic merge/sort code. */
+/** A row's track in one property — an empty, off track if it has none yet. */
+export const trackOf = (row: ShotRow, side: Side): Track => row.tracks[side] ?? EMPTY_TRACK;
+const EMPTY_TRACK: Track = Object.freeze({ ...emptyTrack(), pipeline: Object.freeze(emptyPipeline()) }) as Track;
+
+/** Read a row field by its path, for generic merge/sort code. */
 export function getRowField(row: ShotRow, path: RowFieldPath): unknown {
-  let cur: unknown = row;
-  for (const p of path.split('.')) {
-    if (cur == null || typeof cur !== 'object') return undefined;
-    cur = (cur as Record<string, unknown>)[p];
-  }
-  return cur;
+  const parsed = parseFieldPath(path);
+  if (!parsed) return undefined;
+  if ('top' in parsed) return row[parsed.top];
+  const track = trackOf(row, parsed.side);
+  if (parsed.field.startsWith('pipeline.')) return track.pipeline[parsed.field.slice(9) as PipelineStage];
+  return track[parsed.field as Exclude<TrackFieldPath, `pipeline.${string}`>];
 }
 
-/** Set a row field by its dot path, returning a new row (rows are never mutated). */
+/** Set a row field by its path, returning a new row (rows are never mutated). */
 export function setRowField(row: ShotRow, path: RowFieldPath, value: unknown): ShotRow {
-  if (!path.includes('.')) {
-    return { ...row, [path]: value } as ShotRow;
+  const parsed = parseFieldPath(path);
+  if (!parsed) return row;
+  if ('top' in parsed) return { ...row, [parsed.top]: value } as ShotRow;
+  const track = row.tracks[parsed.side] ?? emptyTrack();
+  let next: Track;
+  if (parsed.field.startsWith('pipeline.')) {
+    next = { ...track, pipeline: { ...track.pipeline, [parsed.field.slice(9)]: normalizeStage(value) } };
+  } else if (parsed.field === 'on') {
+    next = { ...track, on: normalizeStage(value) };
+  } else if (parsed.field === 'selectType') {
+    next = { ...track, selectType: value === 'alt' ? 'alt' : 'main' };
+  } else {
+    next = { ...track, [parsed.field]: String(value ?? '') };
   }
-  const [side, rest] = path.split(/\.(.+)/) as [Side, string];
-  const placement = row[side];
-  if (!rest.includes('.')) {
-    return { ...row, [side]: { ...placement, [rest]: value } };
-  }
-  const [, stage] = rest.split('.') as ['pipeline', PipelineStage];
-  return { ...row, [side]: { ...placement, pipeline: { ...placement.pipeline, [stage]: normalizeStage(value) } } };
+  return { ...row, tracks: { ...row.tracks, [parsed.side]: next } };
 }
 
 /** Set a field and record who changed it, in one step. */
@@ -260,17 +358,48 @@ export function touchRowField(row: ShotRow, path: RowFieldPath, value: unknown, 
 export function normalizeRow(raw: unknown, fallbackId?: string): ShotRow {
   const r = (raw ?? {}) as Partial<ShotRow> & Record<string, unknown>;
   const base = makeRow(String(r.id ?? fallbackId ?? newId()));
-  const placement = (p: unknown): Placement => {
-    const src = (p ?? {}) as Partial<Placement> & { pipeline?: Record<string, unknown> };
+  const track = (p: unknown, on: boolean): Track => {
+    const src = (p ?? {}) as Partial<Track> & { pipeline?: Record<string, unknown> };
     const pipeline = emptyPipeline();
     for (const stage of PIPELINE_STAGES) pipeline[stage] = normalizeStage(src.pipeline?.[stage]);
     return {
+      on,
       position: String(src.position ?? ''),
       selectType: src.selectType === 'alt' ? 'alt' : 'main',
       retoucher: String(src.retoucher ?? ''),
       pipeline,
     };
   };
+
+  const fieldTimes: FieldTimes = {};
+  for (const [path, stamp] of Object.entries((r.fieldTimes && typeof r.fieldTimes === 'object' ? r.fieldTimes : {}) as FieldTimes)) {
+    if (stamp && typeof stamp.t === 'number' && (path === 'usage' || isRowFieldPath(path))) fieldTimes[path] = stamp;
+  }
+
+  const tracks: Record<Side, Track> = {};
+  if (r.tracks && typeof r.tracks === 'object') {
+    for (const [side, t] of Object.entries(r.tracks as Record<string, unknown>)) {
+      if (isPropertyId(side)) tracks[side] = track(t, normalizeStage((t as Partial<Track> | null)?.on));
+    }
+  } else {
+    // v1–v3: a fixed magazine and press-release pair and one `usage` field,
+    // which becomes each track's own `on` — with the same stamp, so a usage
+    // change merges against a newer site's per-property switch correctly.
+    const usage = r.usage;
+    tracks.mag = track(r.mag, usage === 'mag' || usage === 'both');
+    tracks.pr = track(r.pr, usage === 'pr' || usage === 'both');
+  }
+  // A v3 row's usage stamp is when its usage last changed: it dates both
+  // switches unless one carries a newer stamp of its own. A row written by
+  // 0.4 can hold an older `mag.on` stamp it received earlier and kept, so
+  // the usage stamp has to win over it, not just fill a gap.
+  if (fieldTimes.usage && !(r.tracks && typeof r.tracks === 'object')) {
+    for (const side of ['mag', 'pr']) {
+      if (tracks[side] && isNewerStamp(fieldTimes.usage, fieldTimes[`${side}.on`])) fieldTimes[`${side}.on`] = fieldTimes.usage;
+    }
+  }
+  delete fieldTimes.usage;
+
   const comments: Record<string, ShotComment> = {};
   for (const [id, c] of Object.entries((r.comments ?? {}) as Record<string, Partial<ShotComment>>)) {
     if (!c || typeof c.text !== 'string') continue;
@@ -281,7 +410,7 @@ export function normalizeRow(raw: unknown, fallbackId?: string): ShotRow {
       author: String(c.author ?? ''),
       role: c.role === 'executive' ? 'executive' : 'staff',
       at: Number(c.at ?? 0),
-      side: c.side === 'mag' || c.side === 'pr' ? c.side : null,
+      side: isPropertyId(c.side) ? c.side : null,
       replyTo: typeof c.replyTo === 'string' ? c.replyTo : null,
       resolved: Boolean(c.resolved),
       resolvedBy: String(c.resolvedBy ?? ''),
@@ -293,16 +422,40 @@ export function normalizeRow(raw: unknown, fallbackId?: string): ShotRow {
     ...base,
     shotNum: String(r.shotNum ?? ''),
     shotType: isShotType(r.shotType) ? r.shotType : 'unassigned',
-    usage: isUsage(r.usage) ? r.usage : 'none',
     imageHash: typeof r.imageHash === 'string' && r.imageHash ? r.imageHash : null,
-    mag: placement(r.mag),
-    pr: placement(r.pr),
+    tracks,
     elvisAssetId: String(r.elvisAssetId ?? ''),
     elvisName: String(r.elvisName ?? ''),
     elvisPath: String(r.elvisPath ?? ''),
     notes: String(r.notes ?? ''),
     comments,
-    fieldTimes: (r.fieldTimes && typeof r.fieldTimes === 'object' ? r.fieldTimes : {}) as FieldTimes,
+    fieldTimes,
+  };
+}
+
+/**
+ * A row as written to a file or a delta: the v4 tracks, plus the v3 fields
+ * (`mag`, `pr`, `usage` and its stamp) for the two built-in properties. A
+ * site still on 0.4 reads only those — without them it would see the
+ * magazine and press-release values as blank, under the newer stamps, and
+ * merge the blanks over its own. Reading ignores them whenever `tracks` is
+ * present.
+ */
+export function withLegacyFields(row: ShotRow): ShotRow & Record<string, unknown> {
+  const mag = trackOf(row, 'mag');
+  const pr = trackOf(row, 'pr');
+  const usage = mag.on && pr.on ? 'both' : mag.on ? 'mag' : pr.on ? 'pr' : 'none';
+  const a = row.fieldTimes['mag.on'];
+  const b = row.fieldTimes['pr.on'];
+  const usageStamp = a && b ? (isNewerStamp(a, b) ? a : b) : a ?? b;
+  const { on: _m, ...magPlacement } = mag;
+  const { on: _p, ...prPlacement } = pr;
+  return {
+    ...row,
+    usage,
+    mag: magPlacement,
+    pr: prPlacement,
+    fieldTimes: usageStamp ? { ...row.fieldTimes, usage: usageStamp } : row.fieldTimes,
   };
 }
 
@@ -369,6 +522,8 @@ export interface TrackerDocument {
    * this never travels in a delta or the shared file.
    */
   elvisPreviews: Record<string, ElvisPreviewState>;
+  /** Where shots can run — see `PropertyDef`. Merged between sites like rows. */
+  properties: Record<Side, PropertyDef>;
 }
 
 export interface ElvisPreviewState {
@@ -390,6 +545,7 @@ export function emptyDocument(): TrackerDocument {
     sheet: { ...defaultSheetConfig },
     elvisFile: '',
     elvisPreviews: {},
+    properties: defaultProperties(),
   };
 }
 
@@ -441,7 +597,9 @@ export function migrate(raw: unknown): MigrationResult {
  * the new fields (`comments`, `elvisName`, `elvisPath`) with empty values,
  * which `normalizeRow` supplies — no stored value changes meaning. v2 → v3
  * gains `elvisFile` (unshared) and `elvisPreviews` (empty: linked previews
- * are fetched again on the first sync) and drops `elvisLinked`.
+ * are fetched again on the first sync) and drops `elvisLinked`. v3 → v4
+ * gains `properties` (Magazine and Press release, or whatever a v4 file
+ * lists) and `normalizeRow` turns `mag`/`pr`/`usage` into tracks.
  */
 function hydrate(raw: Record<string, unknown>): TrackerDocument {
   const base = emptyDocument();
@@ -460,7 +618,26 @@ function hydrate(raw: Record<string, unknown>): TrackerDocument {
     sheet: { ...defaultSheetConfig, ...((raw.sheet as Partial<SheetConfig>) ?? {}) },
     elvisFile: typeof raw.elvisFile === 'string' ? raw.elvisFile : '',
     elvisPreviews: normalizePreviews(raw.elvisPreviews),
+    properties: withRowProperties(raw.properties ? normalizeProperties(raw.properties) : defaultProperties(), rows),
   };
+}
+
+/**
+ * Make sure every property a row has a track in is defined — a delta or an
+ * older copy can carry a track whose definition hasn't arrived yet. A stand-in
+ * is named after its id until the real definition merges in (any stamp wins
+ * over the stand-in's null).
+ */
+export function withRowProperties(properties: Record<Side, PropertyDef>, rows: Record<string, ShotRow>): Record<Side, PropertyDef> {
+  let out = properties;
+  for (const row of Object.values(rows)) {
+    for (const side of Object.keys(row.tracks)) {
+      if (out[side]) continue;
+      out = out === properties ? { ...properties } : out;
+      out[side] = normalizeProperty({}, side, Object.keys(out).length) as PropertyDef;
+    }
+  }
+  return out;
 }
 
 function normalizePreviews(raw: unknown): Record<string, ElvisPreviewState> {
@@ -483,11 +660,14 @@ interface V1Pipeline {
   approved: boolean;
 }
 
+/** v1–v3's single usage field, before properties were a list. */
+type V1Usage = 'none' | 'mag' | 'pr' | 'both';
+
 interface V1Row {
   id: string;
   shotNum: string;
   shotType: ShotType;
-  usage: Usage;
+  usage: V1Usage;
   imageHash: string | null;
   mag: { position: string; selectType: SelectType; retoucher: string; pipeline: V1Pipeline };
   pr: { position: string; selectType: SelectType; retoucher: string; pipeline: V1Pipeline };
@@ -591,7 +771,7 @@ function migrateLegacyHtmlTool(input: Record<string, unknown>): {
 function isShotType(v: unknown): v is ShotType {
   return v === 'unassigned' || v === 'longshot' || v === 'closeup';
 }
-function isUsage(v: unknown): v is Usage {
+function isUsage(v: unknown): v is V1Usage {
   return v === 'none' || v === 'mag' || v === 'pr' || v === 'both';
 }
 

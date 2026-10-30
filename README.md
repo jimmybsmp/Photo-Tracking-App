@@ -1,15 +1,34 @@
 # PhotoTrack
 
-A photo production tracker for a shoot: every frame, where it runs —
-magazine, press release, or both — who is retouching it, and where it stands
-on each property's track: retouched → QC → assembled → submitted → approved.
+A photo production tracker for a shoot: every frame, where it runs — the
+magazine, a press release, any other property you add, often several at
+once — who is retouching it, and where it stands on each property's track:
+retouched → QC → assembled → submitted → approved.
 Built so that an executive and every member of staff, at any site, see the
 same current picture, and so that an executive's concerns reach the people
 doing the work and get answered.
 
-Magazine and press release are tracked separately, every stage included: a
-magazine image is printed far larger than anything online and usually gets its
-own CMYK colour work and detail retouching.
+Each property is tracked separately, every stage included: a magazine image
+is printed far larger than anything online and usually gets its own CMYK
+colour work and detail retouching.
+
+## Properties
+
+A project starts with **Magazine** and **Press release**. Add more under File
+→ Properties… (or **+ Property…** on any shot, or *Add or change properties*
+on the Overview): a name, a short tag for tiles and the sheet (WEB, SOC), a
+colour, and what its position is called (Page #, Post #). Every property works
+the same — its own five stages, retoucher, position and select — and a shot
+can run in any combination; tick them under **Runs in** on the shot, or for
+many shots at once from the batch bar. Shots running in more than one property
+are listed together on the Overview.
+
+**Hide** takes a property out of every view and count without deleting
+anything; **Show** brings each shot's track back as it was. New properties,
+renames and colours reach the other sites through the shared file like any
+other change. Every site needs 0.5 or later to see added properties; a site
+still on 0.4 keeps working on Magazine and Press release and never loses data
+either way.
 
 ## Who sees what
 
@@ -36,8 +55,8 @@ It starts offline and moves onto Elvis one shot at a time:
 1. **Select** — someone goes through the raw folder, picks a frame, makes a
    JPEG of it and drops it on the Shots tab. That shot is now tracked. Nothing
    needs Elvis yet.
-2. **Set where each shot runs** — Magazine, Press release, or Both — and its
-   shot type. A longshot skips assembly, submission and approval; those three
+2. **Set where each shot runs** — any of the project's properties, in any
+   combination — and its shot type. A longshot skips assembly, submission and approval; those three
    stages are hidden for it and left out of every count.
 3. **Share the project** (once per shoot) — every site works from one shared
    file in Elvis; see below. Each site sees the same shots, stages, comments
@@ -169,8 +188,8 @@ one of the server's API licences, so the session is reused.
 
 `⌘Z` / `⇧⌘Z` undo/redo (a burst of typing undoes as one step) · `⌘S` save,
 `⇧⌘S` save as · `N` new shot · `Esc` close the shot panel · with a shot open,
-`1`–`5` toggle its stages in order — on its magazine track, or its only track;
-`⇧1`–`⇧5` for the press-release track of a shot in both.
+`1`–`5` toggle its stages in order on the first property it runs in, `⇧1`–`⇧5`
+on the second.
 
 ## Before pushing
 

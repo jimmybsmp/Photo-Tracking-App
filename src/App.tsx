@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { redo, startHistory, undo } from '@/state/history';
-import { applicableStages } from '@/state/selectors';
+import { activeSides, applicableStages } from '@/state/selectors';
+import { propertyList } from '@/state/properties';
+import { useUiStore } from '@/state/ui';
 import { clearRecovery, readRecovery, writeRecovery } from '@/lib/autosave';
 import { debounce } from '@/lib/debounce';
 import { desktop } from '@/lib/desktop';
@@ -20,6 +22,7 @@ import { useFileImport } from '@/components/grid/useFileImport';
 import { Inspector } from '@/components/inspector/Inspector';
 import { TrackerSheet } from '@/components/table/TrackerSheet';
 import { ElvisPanel } from '@/components/elvis/ElvisPanel';
+import { PropertiesDialog } from '@/components/properties/PropertiesDialog';
 
 /** One autosave scheduler for the app's lifetime. */
 const autosave = debounce((doc: TrackerDocument) => void writeRecovery(doc), 800);
@@ -32,7 +35,9 @@ export default function App() {
   const [identityOpen, setIdentityOpen] = useState(() => !getIdentity());
   const { importFiles } = useFileImport();
   const importRef = useRef<HTMLInputElement>(null);
-  const modalOpen = elvisOpen || identityOpen;
+  const propertiesOpen = useUiStore((s) => s.propertiesOpen);
+  const closeProperties = useUiStore((s) => s.closeProperties);
+  const modalOpen = elvisOpen || identityOpen || propertiesOpen;
 
   useEffect(() => startHistory(), []);
   useEffect(() => startAutoSync(), []);
@@ -118,8 +123,8 @@ export default function App() {
   }, []);
 
   // Keyboard. Stage hotkeys act on the shot open in the inspector: 1–5 for
-  // its magazine track (or its only track), ⇧1–5 for press release when it
-  // runs in both. Nothing fires while typing in a field or with a dialog up.
+  // the first property it runs in, ⇧1–5 for the second. Nothing fires while
+  // typing in a field or with a dialog up.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -159,11 +164,11 @@ export default function App() {
       const digit = /^Digit([1-5])$/.exec(e.code);
       if (digit && store.activeRowId) {
         const row = store.doc.rows[store.activeRowId];
-        if (!row || row.usage === 'none') return;
+        if (!row) return;
+        const side = activeSides(row, propertyList(store.doc.properties))[e.shiftKey ? 1 : 0];
         const stage = applicableStages(row)[Number(digit[1]) - 1];
-        if (!stage) return;
+        if (!side || !stage) return;
         e.preventDefault();
-        const side = row.usage === 'pr' || (row.usage === 'both' && e.shiftKey) ? 'pr' : 'mag';
         store.toggleStage(row.id, side, stage);
       }
     };
@@ -200,6 +205,7 @@ export default function App() {
 
       {elvisOpen && <ElvisPanel onClose={() => setElvisOpen(false)} />}
       {identityOpen && <IdentityDialog required={!getIdentity()} onDone={() => setIdentityOpen(false)} />}
+      {propertiesOpen && <PropertiesDialog onClose={closeProperties} />}
       <Toasts />
     </div>
   );

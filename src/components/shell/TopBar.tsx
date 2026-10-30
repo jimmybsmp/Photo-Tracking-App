@@ -13,6 +13,7 @@ import {
   saveAction,
 } from '@/lib/fileActions';
 import { useIdentity } from '@/components/ui/hooks';
+import { useUiStore } from '@/state/ui';
 import { SyncChip } from './SyncChip';
 
 const VIEWS: Array<{ id: ViewMode; label: string }> = [
@@ -112,6 +113,8 @@ function FileMenu() {
           {item('Open…', openProjectAction, '⌘O')}
           {item('Save', () => saveAction(false), '⌘S')}
           {item('Save as…', () => saveAction(true), '⇧⌘S')}
+          <div className="menu-sep" />
+          {item('Properties…', () => useUiStore.getState().openProperties())}
           <div className="menu-sep" />
           {item('Export changes for another unit…', exportDeltaAction)}
           {item('Import changes from another unit…', importDeltaAction)}

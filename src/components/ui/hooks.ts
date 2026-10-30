@@ -1,5 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getIdentity, onIdentityChange, type Identity } from '@/lib/identity';
+import { propertyList } from '@/state/properties';
+import { useTrackerStore } from '@/state/useTrackerStore';
+import type { PropertyDef } from '@/state/schema';
+
+/** The project's properties in use, in order. Changes only when a property does. */
+export function useProperties(): PropertyDef[] {
+  const properties = useTrackerStore((s) => s.doc.properties);
+  return useMemo(() => propertyList(properties), [properties]);
+}
 
 /** The current user, re-rendering when they change their name or role. */
 export function useIdentity(): Identity | null {

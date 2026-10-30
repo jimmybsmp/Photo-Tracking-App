@@ -6,9 +6,10 @@
  *
  * Run with `npm run test:logic` (bundled by scripts/test-logic.mjs).
  */
-import { migrate, type AssetMeta, type ShotRow, type TrackerDocument } from '@/state/schema';
+import { SCHEMA_VERSION, defaultProperties, migrate, trackOf, withLegacyFields, type AssetMeta, type ShotRow, type TrackerDocument } from '@/state/schema';
+import { propertyList } from '@/state/properties';
+import { activeSides, computeStats, defaultFilters, isRowComplete, isShared, matchesFilters, nextStage, openConcerns } from '@/state/selectors';
 import { createHash } from 'node:crypto';
-import { computeStats, isRowComplete, nextStage, openConcerns } from '@/state/selectors';
 import { useTrackerStore } from '@/state/useTrackerStore';
 import { startHistory, undo } from '@/state/history';
 import { setIdentity } from '@/lib/identity';
@@ -86,14 +87,16 @@ async function main() {
     };
     const { doc } = migrate(v1);
     const r = doc.rows.r1;
-    check('v1 file opens at the current version', doc.schemaVersion === 3);
-    check('v1 values survive unchanged', r.mag.position === '12' && r.pr.retoucher === 'AB' && r.notes === 'hero' && r.mag.pipeline.qc === true && r.pr.pipeline.qc === false);
+    check('v1 file opens at the current version', doc.schemaVersion === SCHEMA_VERSION);
+    check('v1 values survive unchanged', r.tracks.mag.position === '12' && r.tracks.pr.retoucher === 'AB' && r.notes === 'hero' && r.tracks.mag.pipeline.qc === true && r.tracks.pr.pipeline.qc === false);
     check('v1 rows gain an empty comment thread', r.comments && Object.keys(r.comments).length === 0);
     check('v1 edit stamps are kept', r.fieldTimes.shotNum?.t === 5);
-    check('longshot complete on mag without assembled/submitted/approved', isRowComplete({ ...r, usage: 'mag' }));
+    const defaults = propertyList(defaultProperties());
+    check('a v1 shot in both runs in both properties', activeSides(r, defaults).join() === 'mag,pr');
+    check('longshot complete on mag without assembled/submitted/approved', isRowComplete({ ...r, tracks: { ...r.tracks, pr: { ...r.tracks.pr, on: false } } }, defaults));
 
     const v2 = migrate({ ...v1, schemaVersion: 2, elvisLinked: true }).doc;
-    check('a v2 file opens as v3, unshared, its folder link dropped', v2.schemaVersion === 3 && v2.elvisFile === '' && Object.keys(v2.elvisPreviews).length === 0 && !('elvisLinked' in v2));
+    check('a v2 file opens as v3, unshared, its folder link dropped', v2.schemaVersion === SCHEMA_VERSION && v2.elvisFile === '' && Object.keys(v2.elvisPreviews).length === 0 && !('elvisLinked' in v2));
     const v3 = migrate({ ...v1, schemaVersion: 3, elvisFile: '/PhotoTrack/G.ptdelta', elvisPreviews: { A1: { version: '2', hash: 'h' }, bad: 4 } }).doc;
     check('a v3 file keeps its shared file and preview versions', v3.elvisFile === '/PhotoTrack/G.ptdelta' && v3.elvisPreviews.A1?.hash === 'h' && !('bad' in v3.elvisPreviews));
 
@@ -104,7 +107,7 @@ async function main() {
     const old = migrate(legacy).doc;
     const lr = old.rows[old.rowIds[0]];
     check('original HTML tool export still imports', old.header.event === 'Old tool' && lr.shotNum === '9');
-    check('…with its toggles mapped to the right property', lr.mag.pipeline.retouched && !lr.pr.pipeline.retouched && lr.pr.pipeline.qc && !lr.mag.pipeline.qc, { mag: lr.mag.pipeline, pr: lr.pr.pipeline });
+    check('…with its toggles mapped to the right property', lr.tracks.mag.pipeline.retouched && !lr.tracks.pr.pipeline.retouched && lr.tracks.pr.pipeline.qc && !lr.tracks.mag.pipeline.qc, { mag: lr.tracks.mag.pipeline, pr: lr.tracks.pr.pipeline });
   }
 
   /* ---------------------------------------------------------------- */
@@ -112,13 +115,13 @@ async function main() {
   {
     store().newProject();
     const id = store().addRow();
-    store().setField(id, 'usage', 'pr');
+    store().setField(id, 'pr.on', true);
     store().setField(id, 'shotType', 'longshot');
     store().setStage(id, 'pr', 'assembled', true);
-    check('a longshot cannot be marked assembled', store().doc.rows[id].pr.pipeline.assembled === false);
+    check('a longshot cannot be marked assembled', store().doc.rows[id].tracks.pr.pipeline.assembled === false);
     store().setStage(id, 'pr', 'retouched', true);
     store().setStage(id, 'pr', 'qc', true);
-    check('a longshot is complete after retouch + QC', isRowComplete(store().doc.rows[id]));
+    check('a longshot is complete after retouch + QC', isRowComplete(store().doc.rows[id], propertyList(store().doc.properties)));
     const stats = computeStats(store().doc);
     check('exempt stages are left out of the counts', stats.sides.pr.stages.assembled.eligible === 0 && stats.sides.pr.complete === 1, stats.sides.pr);
 
@@ -126,7 +129,7 @@ async function main() {
     store().setStage(id, 'pr', 'assembled', true);
     store().setField(id, 'shotType', 'longshot');
     store().setField(id, 'shotType', 'closeup');
-    check('switching shot type back and forth keeps the stored stage', store().doc.rows[id].pr.pipeline.assembled === true);
+    check('switching shot type back and forth keeps the stored stage', store().doc.rows[id].tracks.pr.pipeline.assembled === true);
     check('a close-up waits on the next stage', nextStage(store().doc.rows[id], 'pr') === 'submitted');
   }
 
@@ -141,7 +144,7 @@ async function main() {
     }
     store().setStage(id, 'mag', 'retouched', true);
     undo();
-    check('undo reverts the last click on its own', store().doc.rows[id].mag.pipeline.retouched === false && store().doc.rows[id].shotNum === '1234');
+    check('undo reverts the last click on its own', trackOf(store().doc.rows[id], 'mag').pipeline.retouched === false && store().doc.rows[id].shotNum === '1234');
     undo();
     check('a burst of typing undoes as one step', store().doc.rows[id].shotNum === '', store().doc.rows[id]?.shotNum);
   }
@@ -180,7 +183,8 @@ async function main() {
     store().newProject();
     setIdentity({ name: 'A', role: 'staff' });
     const id = store().addRow();
-    store().setField(id, 'usage', 'both');
+    store().setField(id, 'mag.on', true);
+    store().setField(id, 'pr.on', true);
     const base = store().doc;
 
     let siteA = await onSite(base, 'A', () => store().setStage(id, 'mag', 'retouched', true));
@@ -192,7 +196,7 @@ async function main() {
     const intoB = mergeDelta(siteB, buildDelta(siteA, 0));
     siteA = intoA.doc;
     siteB = intoB.doc;
-    check('edits to different properties of one shot both survive', siteA.rows[id].mag.pipeline.retouched && siteA.rows[id].pr.pipeline.qc);
+    check('edits to different properties of one shot both survive', siteA.rows[id].tracks.mag.pipeline.retouched && siteA.rows[id].tracks.pr.pipeline.qc);
     check('a concern travels in a delta file', Object.keys(siteA.rows[id].comments).length === 1);
     check('both sites end up identical', canonical(siteA.rows[id]) === canonical(siteB.rows[id]));
 
@@ -203,6 +207,86 @@ async function main() {
     const docB = { ...siteB, rows: { 'local-2': b }, rowIds: ['local-2'] };
     const merged = mergeDelta(docA, buildDelta(docB, 0)).doc;
     check('the same Elvis asset under two row ids merges into one shot', merged.rowIds.length === 1 && merged.rows['local-1'].notes === 'b', merged.rowIds);
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log('\ncustom properties');
+  {
+    store().newProject();
+    setIdentity({ name: 'Producer', role: 'staff' });
+    check('a new project starts with Magazine and Press release', propertyList(store().doc.properties).map((p) => p.name).join() === 'Magazine,Press release');
+    const id = store().addRow();
+    store().setField(id, 'mag.on', true);
+    const web = store().addProperty('Website');
+    const webDef = store().doc.properties[web];
+    check('an added property gets a tag, a colour of its own, and goes last', webDef.short === 'WEB' && webDef.color !== '#60a5fa' && webDef.color !== '#34d399' && propertyList(store().doc.properties).at(-1)?.id === web, webDef);
+
+    store().setField(id, `${web}.on`, true);
+    let props = propertyList(store().doc.properties);
+    let row = store().doc.rows[id];
+    check('a shot can run in the new property alongside the magazine', activeSides(row, props).join() === `mag,${web}` && isShared(row, props));
+    store().setStage(id, web, 'retouched', true);
+    store().setField(id, `${web}.retoucher`, 'Ana', { typing: false });
+    row = store().doc.rows[id];
+    check('its stages and retoucher are its own', row.tracks[web].pipeline.retouched && !row.tracks.mag.pipeline.retouched && row.tracks[web].retoucher === 'Ana');
+    let stats = computeStats(store().doc);
+    check('the overview counts it like any property', stats.sides[web].shots === 1 && stats.sides[web].stages.retouched.done === 1 && stats.shared === 1, stats.sides[web]);
+    check('filters find it', matchesFilters(row, { ...defaultFilters, property: web }, props) && matchesFilters(row, { ...defaultFilters, property: 'shared' }, props));
+
+    store().batchSetStage([id], 'active', 'qc', true);
+    row = store().doc.rows[id];
+    check('a batch change aimed at "every property it runs in" reaches the new one too', row.tracks[web].pipeline.qc && row.tracks.mag.pipeline.qc);
+
+    store().setPropertyArchived(web, true);
+    props = propertyList(store().doc.properties);
+    row = store().doc.rows[id];
+    stats = computeStats(store().doc);
+    check('hiding a property takes it out of views and counts', activeSides(row, props).join() === 'mag' && !(web in stats.sides) && stats.shared === 0);
+    check('…without discarding anything in it', row.tracks[web].on && row.tracks[web].retoucher === 'Ana' && row.tracks[web].pipeline.retouched);
+    store().setPropertyArchived(web, false);
+    check('showing it again brings the shot back in it, as it was', activeSides(store().doc.rows[id], propertyList(store().doc.properties)).includes(web));
+
+    store().moveProperty(web, -1);
+    check('properties can be reordered', propertyList(store().doc.properties).map((p) => p.id).join() === `mag,${web},pr`);
+    store().updateProperty(web, { name: 'Web', positionLabel: 'Page #' });
+    check('…and renamed', store().doc.properties[web].name === 'Web' && store().doc.properties[web].positionLabel === 'Page #');
+
+    // Two sites each add a property and use it; a delta each way.
+    const base = store().doc;
+    let siteA = await onSite(base, 'A', () => {
+      const social = store().addProperty('Social');
+      store().setField(id, `${social}.on`, true);
+    });
+    let siteB = await onSite(base, 'B', () => {
+      const book = store().addProperty('Annual report');
+      store().setField(id, `${book}.on`, true);
+      store().updateProperty(web, { color: '#f472b6' });
+    });
+    siteA = mergeDelta(siteA, buildDelta(siteB, 0)).doc;
+    siteB = mergeDelta(siteB, buildDelta(siteA, 0)).doc;
+    const names = (d: TrackerDocument) => propertyList(d.properties).map((p) => p.name).sort().join();
+    check('properties added at two sites both arrive at both', names(siteA) === names(siteB) && names(siteA).includes('Social') && names(siteA).includes('Annual report'), [names(siteA), names(siteB)]);
+    // Magazine, Web, and the two new ones.
+    check('…with the shot in both new ones at both sites', activeSides(siteA.rows[id], propertyList(siteA.properties)).length === 4 && activeSides(siteB.rows[id], propertyList(siteB.properties)).length === 4);
+    check('a property edit at one site reaches the other', siteA.properties[web].color === '#f472b6');
+
+    // A site still on 0.4 (v3 rows: mag/pr/usage) in the same exchange.
+    const out = buildDelta(siteA, 0).rows[id] as unknown as Record<string, unknown> & { usage: string; mag: { retoucher: string } };
+    check('rows going out still carry v3 fields for a site on 0.4', out.usage === 'mag' && typeof out.mag === 'object' && out.mag.retoucher === '');
+    const old = withLegacyFields(siteA.rows[id]) as unknown as Record<string, unknown>;
+    const fromOld = { ...old, tracks: undefined, usage: 'pr', fieldTimes: { ...siteA.rows[id].fieldTimes, usage: { t: Date.now() + 1000, d: 'old', u: 'Old site' } } };
+    const legacyDelta = { ...buildDelta(siteA, 0), rows: { [id]: fromOld as unknown as ShotRow }, properties: undefined };
+    const afterOld = mergeDelta(siteA, legacyDelta).doc;
+    check('a newer usage change from a 0.4 site lands as magazine off, press release on', afterOld.rows[id].tracks.mag.on === false && afterOld.rows[id].tracks.pr.on === true);
+    check('…and leaves the added properties alone', afterOld.rows[id].tracks[web].on === true && Object.keys(afterOld.properties).length === 5);
+
+    // A v3 file opens with its usage turned into tracks, stamps kept.
+    const v3 = migrate({
+      schemaVersion: 3,
+      rows: { r: { id: 'r', usage: 'both', mag: { position: '7' }, pr: {}, fieldTimes: { usage: { t: 50, d: 'x', u: 'Jo' } } } },
+      rowIds: ['r'],
+    }).doc;
+    check('a v3 file opens with both tracks on and the usage stamp on each', v3.rows.r.tracks.mag.on && v3.rows.r.tracks.pr.on && v3.rows.r.tracks.mag.position === '7' && v3.rows.r.fieldTimes['pr.on']?.u === 'Jo' && !('usage' in v3.rows.r.fieldTimes));
   }
 
   /* ---------------------------------------------------------------- */
@@ -250,7 +334,8 @@ async function main() {
     let london = fresh();
     london = await onSite(london, 'Selector', () => {
       store().addRowsFromAssets(['IMG_4821.jpg', 'IMG_4822.jpg', 'IMG_4823.jpg'].map((n) => fakeAsset(n, new TextEncoder().encode(n))));
-      store().setField(store().doc.rowIds[0], 'usage', 'both');
+      store().setField(store().doc.rowIds[0], 'mag.on', true);
+      store().setField(store().doc.rowIds[0], 'pr.on', true);
     });
     london = await run(london, 'Selector', () => shareProject(PATH));
     check('sharing creates the shared file and its photos file', filesAt(PATH).length === 1 && filesAt(PHOTOS).length === 1, server.state.uploads);
@@ -261,7 +346,7 @@ async function main() {
     // Another site joins.
     let exec = await run(fresh(), 'Exec', () => shareProject(PATH));
     const e4821 = byShot(exec, 'IMG_4821');
-    check('a site that joins gets every shot', exec.rowIds.length === 3 && e4821?.usage === 'both', exec.rowIds.length);
+    check('a site that joins gets every shot', exec.rowIds.length === 3 && e4821?.tracks.mag?.on === true && e4821?.tracks.pr?.on === true, exec.rowIds.length);
     check('…with the photos the selector dropped in', exec.rowIds.every((id) => Boolean(exec.assets[exec.rows[id].imageHash ?? '']?.thumbUrl)));
     check('joining writes nothing new', uploads() === 2, server.state.uploads);
 
@@ -299,6 +384,15 @@ async function main() {
     check('Elvis is only ever asked for linked ids, the shared folder, or a lookup — never the whole folder', asked.every((q: string) => /^(id:|folderPath:|name:)/.test(q)), asked);
     check('…and the other test frames were never touched', server.state.imageFetches <= 6, server.state.imageFetches);
 
+    // A property added at one site reaches the others through the shared file.
+    let webId = '';
+    london = await run(london, 'Selector', () => {
+      webId = store().addProperty('Website');
+      store().setField(byShot(store().doc, 'IMG_4822').id, `${webId}.on`, true);
+    });
+    exec = await run(exec, 'Exec');
+    check('a property added at one site arrives at the others with its shots', exec.properties[webId]?.name === 'Website' && byShot(exec, 'IMG_4822').tracks[webId]?.on === true);
+
     // An executive concern reaches the retoucher, and the resolution comes back.
     exec = await run(exec, 'Exec', () => store().addComment(rowId, { kind: 'concern', text: 'Skin too warm on the left', side: 'mag' }));
     london = await run(london, 'Retoucher');
@@ -316,7 +410,7 @@ async function main() {
     filesAt(PATH)[0].metadata.versionNumber += 1;
     const n0 = uploads();
     exec = await run(exec, 'Exec');
-    check('a site whose change was overwritten checks it in again', uploads() === n0 + 1 && fileContent(PATH).rows[rowId].pr.pipeline.qc, server.state.uploads.slice(n0));
+    check('a site whose change was overwritten checks it in again', uploads() === n0 + 1 && fileContent(PATH).rows[rowId].tracks.pr.pipeline.qc, server.state.uploads.slice(n0));
 
     // The asset disappears from Elvis: the shot keeps its last picture.
     server.remove('A1');

@@ -2,36 +2,41 @@ import { useState } from 'react';
 import { useTrackerStore, type SideTarget } from '@/state/useTrackerStore';
 import { useShallow } from 'zustand/react/shallow';
 import { PIPELINE_STAGES, STAGE_LABELS, type PipelineStage } from '@/state/schema';
+import { useProperties } from '@/components/ui/hooks';
 
 /**
- * Changes to many shots at once. Always aimed at one property (or both, on
- * purpose): magazine and press release are separate tracks, so "mark these
- * retouched" has to say which.
+ * Changes to many shots at once. Always aimed at one property, or on purpose
+ * at every property each shot runs in: the properties are separate tracks,
+ * so "mark these retouched" has to say which.
  */
 export function BatchBar() {
   const selected = useTrackerStore(useShallow((s) => s.selectedRowIds));
   const batchSetStage = useTrackerStore((s) => s.batchSetStage);
   const batchSetRetoucher = useTrackerStore((s) => s.batchSetRetoucher);
-  const batchSetField = useTrackerStore((s) => s.batchSetField);
+  const batchSetOn = useTrackerStore((s) => s.batchSetOn);
   const deleteRows = useTrackerStore((s) => s.deleteRows);
   const clearSelection = useTrackerStore((s) => s.clearSelection);
-  const [side, setSide] = useState<SideTarget>('mag');
+  const properties = useProperties();
+  const [chosen, setSide] = useState<SideTarget>('active');
   const [stage, setStage] = useState<PipelineStage>('retouched');
   const [retoucher, setRetoucher] = useState('');
 
   if (selected.length === 0) return null;
+  // A property hidden since it was picked falls back to "where each runs".
+  const side = chosen === 'active' || properties.some((p) => p.id === chosen) ? chosen : 'active';
 
   return (
     <div className="batchbar no-print">
       <span className="batch-count">{selected.length} selected</span>
 
-      <div className="segmented">
-        {(['mag', 'pr', 'both'] as SideTarget[]).map((s) => (
-          <button key={s} className={side === s ? 'seg-active' : ''} onClick={() => setSide(s)}>
-            {s === 'mag' ? 'Magazine' : s === 'pr' ? 'Press release' : 'Both'}
-          </button>
+      <select className="field field-select" value={side} onChange={(e) => setSide(e.target.value)} title="Which property these changes apply to">
+        <option value="active">In every property it runs in</option>
+        {properties.map((p) => (
+          <option key={p.id} value={p.id}>
+            In {p.name}
+          </option>
         ))}
-      </div>
+      </select>
 
       <select className="field field-select" value={stage} onChange={(e) => setStage(e.target.value as PipelineStage)}>
         {PIPELINE_STAGES.map((s) => (
@@ -66,15 +71,25 @@ export function BatchBar() {
         className="field field-select"
         value=""
         onChange={(e) => {
-          const usage = e.target.value;
-          if (usage) batchSetField(selected, 'usage', usage);
+          const [action, id] = e.target.value.split(':');
+          if (id) batchSetOn(selected, id, action === 'add');
         }}
       >
-        <option value="">Set usage…</option>
-        <option value="mag">Magazine</option>
-        <option value="pr">Press release</option>
-        <option value="both">Both</option>
-        <option value="none">None</option>
+        <option value="">Runs in…</option>
+        <optgroup label="Add to">
+          {properties.map((p) => (
+            <option key={p.id} value={`add:${p.id}`}>
+              {p.name}
+            </option>
+          ))}
+        </optgroup>
+        <optgroup label="Take out of">
+          {properties.map((p) => (
+            <option key={p.id} value={`remove:${p.id}`}>
+              {p.name}
+            </option>
+          ))}
+        </optgroup>
       </select>
 
       <span className="spacer" />

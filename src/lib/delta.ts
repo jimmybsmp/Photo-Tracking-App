@@ -1,18 +1,23 @@
 import { getDeviceId } from './deviceId';
 import {
-  ROW_FIELD_PATHS,
   getRowField,
   isNewerStamp,
+  isRowFieldPath,
   mergeComment,
+  normalizeProperties,
   normalizeRow,
   setRowField,
+  withLegacyFields,
+  withRowProperties,
   type AssetMeta,
   type FieldStamp,
   type Header,
+  type PropertyDef,
   type ShotComment,
   type ShotRow,
   type TrackerDocument,
 } from '@/state/schema';
+import { mergeProperties } from '@/state/properties';
 
 /**
  * Delta export/import — and the merge rule every sync path shares.
@@ -45,6 +50,8 @@ export interface DeltaFile {
   rows: Record<string, ShotRow>;
   deletedRowIds: Record<string, FieldStamp>;
   assets: Record<string, AssetMeta>;
+  /** The project's properties (added in 0.5; absent from older deltas). */
+  properties?: Record<string, PropertyDef>;
 }
 
 export function isDeltaFile(raw: unknown): raw is DeltaFile {
@@ -73,7 +80,7 @@ export function buildDelta(doc: TrackerDocument, since: number): DeltaFile {
   for (const id of doc.rowIds) {
     const row = doc.rows[id];
     if (!row || rowChangedAt(row) <= since) continue;
-    rows[id] = row;
+    rows[id] = withLegacyFields(row);
     if (row.imageHash) assetHashes.add(row.imageHash);
   }
 
@@ -96,6 +103,7 @@ export function buildDelta(doc: TrackerDocument, since: number): DeltaFile {
     rows,
     deletedRowIds,
     assets,
+    properties: doc.properties,
   };
 }
 
@@ -113,9 +121,8 @@ export interface RowMergeResult {
 export function mergeRow(local: ShotRow, incoming: ShotRow): RowMergeResult {
   let row = local;
   let fieldsChanged = 0;
-  for (const path of ROW_FIELD_PATHS) {
-    const stamp = incoming.fieldTimes[path];
-    if (!stamp || !isNewerStamp(stamp, local.fieldTimes[path])) continue;
+  for (const [path, stamp] of Object.entries(incoming.fieldTimes)) {
+    if (!isRowFieldPath(path) || !stamp || !isNewerStamp(stamp, local.fieldTimes[path])) continue;
     row = setRowField(row, path, getRowField(incoming, path));
     row = { ...row, fieldTimes: { ...row.fieldTimes, [path]: stamp } };
     fieldsChanged++;
@@ -143,6 +150,8 @@ export interface MergeSummary {
   fieldsChanged: number;
   commentsChanged: number;
   headerChanged: boolean;
+  /** Property definitions added or changed. */
+  propertiesChanged: number;
 }
 
 export const emptySummary = (): MergeSummary => ({
@@ -152,10 +161,11 @@ export const emptySummary = (): MergeSummary => ({
   fieldsChanged: 0,
   commentsChanged: 0,
   headerChanged: false,
+  propertiesChanged: 0,
 });
 
 export const summaryChanged = (s: MergeSummary) =>
-  s.rowsAdded + s.rowsUpdated + s.rowsDeleted > 0 || s.headerChanged;
+  s.rowsAdded + s.rowsUpdated + s.rowsDeleted + s.propertiesChanged > 0 || s.headerChanged;
 
 /** Merge a delta into a local document. Never mutates either input. */
 export function mergeDelta(local: TrackerDocument, delta: DeltaFile): { doc: TrackerDocument; summary: MergeSummary } {
@@ -226,5 +236,9 @@ export function mergeDelta(local: TrackerDocument, delta: DeltaFile): { doc: Tra
     summary.headerChanged = true;
   }
 
-  return { doc: { ...local, header, headerTime, rows, rowIds, assets, deletedRowIds }, summary };
+  const merged = mergeProperties(local.properties, delta.properties ? normalizeProperties(delta.properties) : undefined);
+  summary.propertiesChanged = merged.changed;
+  const properties = withRowProperties(merged.properties, rows);
+
+  return { doc: { ...local, header, headerTime, rows, rowIds, assets, deletedRowIds, properties }, summary };
 }
