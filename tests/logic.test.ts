@@ -17,6 +17,7 @@ import {
   isRowComplete,
   isShared,
   isSideComplete,
+  layoutSlots,
   matchesFilters,
   nextStage,
   openConcerns,
@@ -340,6 +341,46 @@ async function main() {
     const v4 = migrate({ schemaVersion: 4, rows: { r: { id: 'r', tracks: { mag: { on: true } } } }, rowIds: ['r'] }).doc;
     props = propertyList(v4.properties);
     check('a v4 file opens with nothing on reject', v4.schemaVersion === SCHEMA_VERSION && !v4.rows.r.tracks.mag.qcReject && !isRejected(v4.rows.r, props));
+  }
+
+  /* ---------------------------------------------------------------- */
+  console.log('\nlayout');
+  {
+    store().newProject();
+    setIdentity({ name: 'Designer', role: 'staff' });
+    const mk = (shot: string, side: string, position: string, select: 'main' | 'alt') => {
+      const id = store().addRow();
+      store().setField(id, 'shotNum', shot);
+      store().setField(id, `${side}.on`, true);
+      store().setField(id, `${side}.position`, position);
+      store().setField(id, `${side}.selectType`, select);
+      return id;
+    };
+    const a = mk('A', 'mag', '10', 'main');
+    const b = mk('B', 'mag', '2', 'alt');
+    const c = mk('C', 'mag', '2', 'main');
+    const d = mk('D', 'mag', '', 'main');
+    mk('E', 'pr', '1', 'main');
+    const e2 = mk('F', 'mag', '2', 'alt');
+    const slots = layoutSlots(store().doc, 'mag');
+    check('slots run in natural order, unplaced last', slots.map((s) => s.position).join() === '2,10,', slots.map((s) => s.position));
+    check('each slot has its select on one side and its alts on the other', slots[0].mains.join() === c && slots[0].alts.join() === [b, e2].join() && slots[1].mains.join() === a);
+    check('shots not placed yet are kept, in their own group', slots[2].mains.join() === d);
+    check('another property’s shots stay on its own layout', layoutSlots(store().doc, 'pr').length === 1 && !slots.some((s) => [...s.mains, ...s.alts].some((id) => store().doc.rows[id].shotNum === 'E')));
+
+    store().setField(c, 'mag.crop', { x: 30, y: 40, zoom: 2.5 });
+    check('a crop is kept on that property’s track', canonical(store().doc.rows[c].tracks.mag.crop) === canonical({ x: 30, y: 40, zoom: 2.5 }) && store().doc.rows[c].tracks.pr?.crop == null);
+    store().setField(c, 'mag.crop', { x: 500, y: -3, zoom: 99 });
+    check('…kept in range', canonical(store().doc.rows[c].tracks.mag.crop) === canonical({ x: 100, y: 0, zoom: 4 }));
+    store().setField(c, 'mag.crop', { x: 50, y: 50, zoom: 1 });
+    check('…and resetting it means no crop', store().doc.rows[c].tracks.mag.crop === null);
+
+    const base = store().doc;
+    const siteA = await onSite(base, 'A', () => store().setField(c, 'mag.crop', { x: 20, y: 20, zoom: 2 }));
+    const siteB = mergeDelta(base, buildDelta(siteA, 0)).doc;
+    check('a crop made at one site reaches the others', siteB.rows[c].tracks.mag.crop?.zoom === 2 && siteB.rows[c].fieldTimes['mag.crop']?.u === 'A');
+    const v5 = migrate({ schemaVersion: 5, rows: { r: { id: 'r', tracks: { mag: { on: true } } } }, rowIds: ['r'] }).doc;
+    check('a v5 file opens uncropped', v5.schemaVersion === SCHEMA_VERSION && v5.rows.r.tracks.mag.crop === null);
   }
 
   /* ---------------------------------------------------------------- */

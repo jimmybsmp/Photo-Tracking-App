@@ -12,6 +12,23 @@ Each property is tracked separately, every stage included: a magazine image
 is printed far larger than anything online and usually gets its own CMYK
 colour work and detail retouching.
 
+## Layout
+
+The **Layout** tab shows one property at a time as pictures, slot by slot —
+Spread 1, Spread 2, … in order — with the select large on the left and its
+alts beside it on the right, so the whole run can be judged at a glance. A
+shot's slot is its position in that property (Spread #, Slide #…) and its
+side is its Select setting (Main select or Alt shot); shots without a
+position are grouped last. Pick the frame shape (landscape, portrait, square)
+and picture size from the bar.
+
+To frame a photo on its subject, hover it and press **Crop**: drag to move,
+scroll or use the slider to zoom, **Done** (or Enter) to finish, **Reset** to
+undo the framing. A crop belongs to that property — the same photo can be
+framed differently in the magazine and the press release — reaches every
+site like any other change, and never alters the photo. Double-click a photo
+to open the shot. Print (⌘P) on this tab prints the layout.
+
 ## Rejects
 
 Every property's track has two reject switches, **QC reject** and **Office

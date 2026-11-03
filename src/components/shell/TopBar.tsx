@@ -19,6 +19,7 @@ import { SyncChip } from './SyncChip';
 const VIEWS: Array<{ id: ViewMode; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'shots', label: 'Shots' },
+  { id: 'layout', label: 'Layout' },
   { id: 'sheet', label: 'Sheet' },
 ];
 
@@ -119,8 +120,8 @@ function FileMenu() {
           {item('Export changes for another unit…', exportDeltaAction)}
           {item('Import changes from another unit…', importDeltaAction)}
           <div className="menu-sep" />
-          {item('Print sheet…', printAction, '⌘P')}
-          {isDesktop() && item('Export sheet as PDF…', exportPdfAction)}
+          {item('Print sheet or layout…', printAction, '⌘P')}
+          {isDesktop() && item('Export sheet or layout as PDF…', exportPdfAction)}
         </div>
       )}
     </div>

@@ -134,8 +134,14 @@ A project with no shared file and nothing linked makes no Elvis calls at all.
 
 ## Design
 
-Three views: Overview (executive dashboard, opens first), Shots (tiles +
-shot panel), Sheet (print). Dark chrome (bars, panels, inspector, overview)
+Four views: Overview (executive dashboard, opens first), Shots (tiles +
+shot panel), Layout (selects and alts as pictures, slot by slot, per
+property — `layoutSlots()`), Sheet (print). A Layout crop is the track's
+`crop` field (`<property>.crop`, stamped like any field); it is drawn by
+`placement()` in `components/layout/LayoutView.tsx`, and a drag paints the
+image directly and saves once on release — never a store update per
+pointer move. Print follows the tab: Layout prints the layout, anything else
+switches to the Sheet. Dark chrome (bars, panels, inspector, overview)
 around a light working surface (shot tiles, the printed sheet). Each property
 keeps one colour everywhere (its `color`, as `--prop` / `--prop-ink` /
 `--prop-wash` from `propertyStyle()`) — the chrome is instrument-panel, the surface

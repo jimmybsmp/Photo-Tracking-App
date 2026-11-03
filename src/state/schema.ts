@@ -42,7 +42,13 @@ import { newId } from '@/lib/compat';
  * (`qcReject`, `officeReject`). Additive — a v4 track reads as not rejected.
  */
 
-export const SCHEMA_VERSION = 5;
+/*
+ * Version 6: each track can carry a `crop` — how its photo is framed on the
+ * Layout page (a focus point and a zoom). Additive: no crop shows the whole
+ * frame, centred. It frames the picture only; the stored photo is untouched.
+ */
+
+export const SCHEMA_VERSION = 6;
 
 /* ------------------------------------------------------------------ *
  * Pipeline
@@ -99,6 +105,32 @@ export interface Track extends Placement {
   qcReject: boolean;
   /** Sent back by the office. Same treatment, its own flag. */
   officeReject: boolean;
+  /** How the photo is framed on the Layout page here; null shows the whole frame. */
+  crop: Crop | null;
+}
+
+/**
+ * A framing: the point to keep in view, in percent of the photo's width and
+ * height, and how far in to zoom (1 = the photo filling its box).
+ */
+export interface Crop {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export const MAX_CROP_ZOOM = 4;
+
+/** A crop from anywhere, kept in range — or null for "no crop". */
+export function normalizeCrop(raw: unknown): Crop | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<Crop>;
+  const num = (v: unknown, lo: number, hi: number, d: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  const crop = { x: num(r.x, 0, 100, 50), y: num(r.y, 0, 100, 50), zoom: num(r.zoom, 1, MAX_CROP_ZOOM, 1) };
+  return crop.zoom === 1 && crop.x === 50 && crop.y === 50 ? null : crop;
 }
 
 /** The two ways a shot gets sent back, each its own flag on each track. */
@@ -110,7 +142,7 @@ export function emptyPlacement(): Placement {
   return { position: '', selectType: 'main', retoucher: '', pipeline: emptyPipeline() };
 }
 
-export const emptyTrack = (): Track => ({ ...emptyPlacement(), on: false, qcReject: false, officeReject: false });
+export const emptyTrack = (): Track => ({ ...emptyPlacement(), on: false, qcReject: false, officeReject: false, crop: null });
 
 /* ------------------------------------------------------------------ *
  * Properties — where shots run
@@ -214,6 +246,7 @@ export const TRACK_FIELD_PATHS = [
   'retoucher',
   'qcReject',
   'officeReject',
+  'crop',
   ...PIPELINE_STAGES.map((stage) => `pipeline.${stage}` as const),
 ] as const;
 export type TrackFieldPath = (typeof TRACK_FIELD_PATHS)[number];
@@ -352,6 +385,8 @@ export function setRowField(row: ShotRow, path: RowFieldPath, value: unknown): S
     next = { ...track, pipeline: { ...track.pipeline, [parsed.field.slice(9)]: normalizeStage(value) } };
   } else if (parsed.field === 'on' || parsed.field === 'qcReject' || parsed.field === 'officeReject') {
     next = { ...track, [parsed.field]: normalizeStage(value) };
+  } else if (parsed.field === 'crop') {
+    next = { ...track, crop: normalizeCrop(value) };
   } else if (parsed.field === 'selectType') {
     next = { ...track, selectType: value === 'alt' ? 'alt' : 'main' };
   } else {
@@ -382,6 +417,7 @@ export function normalizeRow(raw: unknown, fallbackId?: string): ShotRow {
       on,
       qcReject: normalizeStage(src.qcReject),
       officeReject: normalizeStage(src.officeReject),
+      crop: normalizeCrop(src.crop),
       position: String(src.position ?? ''),
       selectType: src.selectType === 'alt' ? 'alt' : 'main',
       retoucher: String(src.retoucher ?? ''),

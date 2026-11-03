@@ -21,6 +21,7 @@ import { ContactSheet } from '@/components/grid/ContactSheet';
 import { useFileImport } from '@/components/grid/useFileImport';
 import { Inspector } from '@/components/inspector/Inspector';
 import { TrackerSheet } from '@/components/table/TrackerSheet';
+import { LayoutView } from '@/components/layout/LayoutView';
 import { ElvisPanel } from '@/components/elvis/ElvisPanel';
 import { PropertiesDialog } from '@/components/properties/PropertiesDialog';
 
@@ -183,6 +184,7 @@ export default function App() {
         <div className="app-view">
           {view === 'overview' && <Overview onImport={() => importRef.current?.click()} />}
           {view === 'shots' && <ContactSheet />}
+          {view === 'layout' && <LayoutView />}
           {view === 'sheet' && <TrackerSheet />}
         </div>
         {activeRowId && view !== 'overview' && <Inspector />}

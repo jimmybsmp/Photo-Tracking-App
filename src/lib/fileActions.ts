@@ -40,8 +40,9 @@ export async function saveAction(forceDialog = false) {
   toast(`Saved ${path.split('/').pop()}`, 'good');
 }
 
+/** Print what's printable: the Layout page when it's open, else the Sheet. */
 function onSheet(run: () => void) {
-  store().setView('sheet');
+  if (store().view !== 'layout') store().setView('sheet');
   // Let the sheet render before the print engine snapshots the page.
   requestAnimationFrame(() => requestAnimationFrame(run));
 }

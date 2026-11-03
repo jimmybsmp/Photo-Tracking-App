@@ -412,3 +412,39 @@ export function matchesFilters(row: ShotRow, f: Filters, properties: PropertyDef
   }
   return true;
 }
+
+/* ------------------------------------------------------------------ *
+ * Layout — selects and alts, slot by slot
+ * ------------------------------------------------------------------ */
+
+export interface LayoutSlot {
+  /** The spread / slide / page as typed; '' for shots not placed yet. */
+  position: string;
+  /** Main selects for this slot, in shot order. */
+  mains: string[];
+  /** Alts for this slot, in shot order. */
+  alts: string[];
+}
+
+/**
+ * One property's layout: every shot running in it, grouped by its position
+ * there — spread 1, 2, 3… in natural order ("2" before "10"), each with its
+ * main selects and its alts — and shots without a position last.
+ */
+export function layoutSlots(doc: TrackerDocument, side: Side): LayoutSlot[] {
+  const slots = new Map<string, LayoutSlot>();
+  for (const id of doc.rowIds) {
+    const row = doc.rows[id];
+    const track = row?.tracks[side];
+    if (!track?.on) continue;
+    const position = track.position.trim();
+    const key = position.toLowerCase();
+    let slot = slots.get(key);
+    if (!slot) slots.set(key, (slot = { position, mains: [], alts: [] }));
+    (track.selectType === 'alt' ? slot.alts : slot.mains).push(id);
+  }
+  return [...slots.values()].sort((a, b) => {
+    if (!a.position !== !b.position) return a.position ? -1 : 1;
+    return a.position.localeCompare(b.position, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}

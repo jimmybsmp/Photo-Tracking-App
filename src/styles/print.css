@@ -1,6 +1,7 @@
 /*
- * Print output. Only the Sheet is printed — the Print command switches to it
- * first — so everything outside `.sheet-page` (top bar, filters, inspector,
+ * Print output: the Layout page when it's open, otherwise the Sheet — the
+ * Print command switches to the Sheet from anywhere else — so everything
+ * outside `.sheet-page` / `.layout-page` (top bar, filters, inspector,
  * toasts) carries `.no-print` and drops out. Tabloid landscape matches the
  * original tool's layout, which crews already print and hand out.
  */
@@ -28,8 +29,23 @@
     height: auto;
     overflow: visible;
   }
-  .sheet-scroll {
+  .sheet-scroll,
+  .layout-scroll {
     overflow: visible;
+  }
+  .layout-page {
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+    border-radius: 0;
+  }
+  .layout-page,
+  .lc-frame,
+  .slot-num,
+  .tile-reject,
+  .layout-slot-unplaced {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .sheet-page {
     margin: 0;

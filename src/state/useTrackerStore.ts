@@ -43,7 +43,7 @@ import {
  * hidden, not reset, and come back intact if the shot type changes back.
  */
 
-export type ViewMode = 'overview' | 'shots' | 'sheet';
+export type ViewMode = 'overview' | 'shots' | 'layout' | 'sheet';
 /** A batch change aims at one property, or at every property each shot runs in. */
 export type SideTarget = Side | 'active';
 
